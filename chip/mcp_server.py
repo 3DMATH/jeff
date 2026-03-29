@@ -200,6 +200,40 @@ def chip_query(prompt: str, system: str = "", max_tokens: int = 2048):
 
 
 # ============================================================
+# VECTOR SEARCH
+# ============================================================
+
+@mcp.tool()
+def chip_search(query: str, top_k: int = 5):
+    """Search the chip's knowledge base.
+
+    Semantic search over indexed content on the card -- papers,
+    datasets, documentation. Returns the most relevant chunks
+    with similarity scores. No need to know file names or paths.
+
+    Args:
+        query: What to search for in natural language.
+        top_k: Number of results to return (default 5).
+    """
+    index_path = os.path.join(VOLUME_PATH, ".jeff", "index", "search.json")
+    if not os.path.isfile(index_path):
+        return json.dumps({"error": "No search index. Run: python3 build_index.py %s" % VOLUME_PATH})
+
+    try:
+        import inference
+        from build_index import search, cosine_similarity
+
+        query_embedding = inference.embed(query)
+        if not query_embedding:
+            return json.dumps({"error": "Embedding failed -- is Ollama running with nomic-embed-text?"})
+
+        results = search(index_path, query_embedding, top_k=top_k)
+        return json.dumps({"query": query, "results": results}, indent=2)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+# ============================================================
 # MAIN
 # ============================================================
 

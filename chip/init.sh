@@ -105,6 +105,7 @@ cp "${JEFF_DIR}/chip/mcp_server.py" "${VOLUME_PATH}/mcp/server.py"
 cp "${JEFF_DIR}/spectral/spectral.py" "${VOLUME_PATH}/mcp/spectral.py"
 cp "${JEFF_DIR}/spectral/tool_chain.py" "${VOLUME_PATH}/mcp/tool_chain.py"
 cp "${JEFF_DIR}/chip/inference.py" "${VOLUME_PATH}/mcp/inference.py"
+cp "${JEFF_DIR}/chip/build_index.py" "${VOLUME_PATH}/mcp/build_index.py"
 
 # Hidden docs directory -- easter egg
 mkdir -p "${VOLUME_PATH}/.jeff/docs"
@@ -171,8 +172,27 @@ echo "        mcp/server.py"
 echo "        mcp/spectral.py"
 echo "        mcp/tool_chain.py"
 echo "        mcp/inference.py"
+echo "        mcp/build_index.py"
 echo "        .jeff/docs/spectral-binding.md"
 echo "        Modelfile"
+
+# Copy datasets if they exist in the repo
+if [[ -d "${JEFF_DIR}/datasets" ]]; then
+    mkdir -p "${VOLUME_PATH}/datasets"
+    cp "${JEFF_DIR}/datasets/"*.json "${VOLUME_PATH}/datasets/" 2>/dev/null || true
+    cp "${JEFF_DIR}/datasets/"*.md "${VOLUME_PATH}/datasets/" 2>/dev/null || true
+    DATASET_COUNT=$(ls "${VOLUME_PATH}/datasets/"*.json 2>/dev/null | wc -l | tr -d ' ')
+    echo "        datasets/ (${DATASET_COUNT} files)"
+fi
+
+# Build search index (requires Ollama with embedding model)
+if command -v ollama &>/dev/null; then
+    echo ""
+    echo "  [2.5/5] Building search index..."
+    python3 "${JEFF_DIR}/chip/build_index.py" "${VOLUME_PATH}" || {
+        warn "Index build failed -- chip_search will be unavailable"
+    }
+fi
 
 # ============================================================
 # STEP 3: Write heartbeat.json

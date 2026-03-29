@@ -98,6 +98,50 @@ def chat(messages, model=None, max_tokens=2048, temperature=0.7, tools=None):
     return result.get("message", {})
 
 
+EMBED_MODEL = os.environ.get("CHIP_EMBED_MODEL", "nomic-embed-text")
+
+
+def embed(text, model=None):
+    """Generate embedding vector for text.
+
+    Args:
+        text: String to embed.
+        model: Override embedding model (defaults to CHIP_EMBED_MODEL).
+
+    Returns:
+        List of floats (embedding vector).
+    """
+    model = model or EMBED_MODEL
+    payload = {
+        "model": model,
+        "input": text,
+    }
+    result = _post("/api/embed", payload, timeout=30)
+    embeddings = result.get("embeddings", [])
+    if embeddings:
+        return embeddings[0]
+    return []
+
+
+def embed_batch(texts, model=None):
+    """Generate embeddings for multiple texts in one call.
+
+    Args:
+        texts: List of strings to embed.
+        model: Override embedding model.
+
+    Returns:
+        List of embedding vectors.
+    """
+    model = model or EMBED_MODEL
+    payload = {
+        "model": model,
+        "input": texts,
+    }
+    result = _post("/api/embed", payload, timeout=120)
+    return result.get("embeddings", [])
+
+
 def status():
     """Check Ollama availability and loaded models.
 

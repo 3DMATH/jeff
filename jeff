@@ -34,14 +34,6 @@ SPECTRAL_DIR="${JEFF_DIR}/spectral"
 STATE_FILE="${JEFF_DIR}/.jeff-state.json"
 MCP_PID_FILE="${JEFF_DIR}/.jeff-mcp.pid"
 
-# Maestro integration (optional -- jeff works standalone too)
-MAESTRO_ROOT=""
-MAESTRO_CUE_SHEETS=""
-_maybe_maestro="$(cd "${JEFF_DIR}/../.." 2>/dev/null && pwd)"
-if [[ -d "${_maybe_maestro}/cue-sheets" ]]; then
-    MAESTRO_ROOT="${_maybe_maestro}"
-    MAESTRO_CUE_SHEETS="${_maybe_maestro}/cue-sheets"
-fi
 
 LOGO='
        ██╗███████╗███████╗███████╗
@@ -109,105 +101,6 @@ _resolve_band() {
     python3 -c "import sys; sys.path.insert(0,'${SPECTRAL_DIR}'); from spectral import resolve; print(resolve('$1').get('band','?'))" 2>/dev/null || echo "?"
 }
 
-_inject_cuesheet() {
-    local label="$1" root_color="$2" band="$3"
-    if [[ -z "${MAESTRO_CUE_SHEETS}" ]]; then
-        return
-    fi
-
-    local label_slug
-    label_slug=$(echo "${label}" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
-    local cuesheet_path="${MAESTRO_CUE_SHEETS}/_jeff-${label_slug}.yaml"
-
-    python3 - "${cuesheet_path}" "${label}" "${root_color}" "${band}" << 'PYEOF'
-import sys
-
-path, label, root_color, band = sys.argv[1:5]
-
-yaml_content = """name: "%s"
-description: "Jeff chip -- root %s (%s band)"
-icon: "\U0001F4BE"
-order: 0
-
-cues:
-  - id: spectral_ama
-    objective: >
-      You are running on a Jeff Booster Chip. Your primary knowledge
-      is Spectral Binding -- a measurement axiom that maps any namespace
-      to a continuous colorspace address using 7-21 perceivable bands
-      per zoom level, labeled with periodic table elements (H through Sc).
-
-      Start by greeting the user and giving a clear, concise definition
-      of Spectral Binding. Then use the chip tools to demonstrate
-      interactively: resolve colors to bands, show the registry, find
-      midpoints between addresses, split bands, measure distances.
-
-      If the user asks deeper questions about the theory, read the
-      paper from the card: chip_read_card .jeff/docs/spectral-binding.md
-
-      Key concepts to be ready to explain:
-        - 16.7 million addresses at 24-bit (hex colors)
-        - 7-21 bands per zoom level (Miller's number)
-        - Periodic table element labels at every level
-        - Addresses are discovered via midpoint, not assigned
-        - Tool chain hashes tools to a root color (chip identity)
-        - Connection to RoPE (rotary position embeddings)
-    context:
-      why: >
-        Every Jeff chip carries Spectral Binding as native knowledge.
-        This is the default experience -- plug in a chip, ask about
-        spectral binding, and it just knows.
-      constraints:
-        - Lead with a clear definition, then demonstrate with tools
-        - Resolve real hex values when giving examples
-        - Show the band registry when explaining structure
-        - Use midpoints to show how addresses are discovered
-        - The paper at .jeff/docs/spectral-binding.md is an easter egg
-        - Keep answers grounded in tool output, not just theory
-      resources:
-        - chip_status
-        - chip_resolve_hex
-        - chip_resolve_deep
-        - chip_midpoint
-        - chip_split_band
-        - chip_distance
-        - chip_registry
-        - chip_constellation
-        - chip_tool_chain
-        - chip_read_card
-      style:
-        tone: conversational
-
-  - id: chip_hello
-    objective: >
-      Report chip status. Show the tool chain root color and
-      resolve it to its spectral band. List what tools are available.
-    context:
-      why: Orient the user to what this chip can do.
-      resources:
-        - chip_status
-        - chip_tool_chain
-        - chip_resolve_hex
-      style:
-        tone: concise
-
-success_criteria: User asks about spectral binding and gets a clear answer backed by live tool demos.
-""" % (label, root_color, band)
-
-with open(path, "w") as f:
-    f.write(yaml_content)
-PYEOF
-
-    echo "${cuesheet_path}"
-}
-
-_remove_cuesheet() {
-    local cuesheet="$1"
-    if [[ -n "${cuesheet}" ]] && [[ -f "${cuesheet}" ]]; then
-        rm -f "${cuesheet}"
-        ok "Cue-sheet removed"
-    fi
-}
 
 _kill_pid() {
     local pid="$1"
@@ -450,15 +343,8 @@ cmd_activate() {
     mcp_pid=$(_start_mcp "${volume}" "${device_id}" "${label}" "${model}" "activated")
     ok "MCP server (PID ${mcp_pid})"
 
-    # Inject cue-sheet
-    local cuesheet_path=""
-    cuesheet_path=$(_inject_cuesheet "${label}" "${root_color}" "${band}")
-    if [[ -n "${cuesheet_path}" ]]; then
-        ok "CueSheet injected"
-    fi
-
     # Write state
-    python3 - "${STATE_FILE}" "${device_id}" "${label}" "${volume}" "${mcp_pid}" "${model}" "${root_color}" "${band}" "${cuesheet_path}" "${vault_vol}" << 'PYEOF'
+    python3 - "${STATE_FILE}" "${device_id}" "${label}" "${volume}" "${mcp_pid}" "${model}" "${root_color}" "${band}" "${vault_vol}" << 'PYEOF'
 import json, sys
 from datetime import datetime, timezone
 path = sys.argv[1]
@@ -466,7 +352,7 @@ state = {
     "device_id": sys.argv[2], "label": sys.argv[3], "volume_path": sys.argv[4],
     "vault_mount": "", "mcp_pid": int(sys.argv[5]), "model": sys.argv[6],
     "mode": "activated", "root_color": sys.argv[7], "band": sys.argv[8],
-    "cuesheet_injection": sys.argv[9], "vault_volume_name": sys.argv[10],
+    "vault_volume_name": sys.argv[9],
     "activated_at": datetime.now(timezone.utc).isoformat()
 }
 with open(path, "w") as f:
@@ -488,10 +374,9 @@ cmd_deactivate() {
         exit 0
     fi
 
-    local label mcp_pid cuesheet mode vault_mount
+    local label mcp_pid mode vault_mount
     label=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('label','?'))" 2>/dev/null || echo "?")
     mcp_pid=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('mcp_pid',''))" 2>/dev/null || echo "")
-    cuesheet=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('cuesheet_injection',''))" 2>/dev/null || echo "")
     mode=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('mode',''))" 2>/dev/null || echo "")
     vault_mount=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('vault_mount',''))" 2>/dev/null || echo "")
 
@@ -513,9 +398,6 @@ cmd_deactivate() {
     # Stop MCP
     _kill_pid "${mcp_pid}"
     ok "MCP stopped"
-
-    # Remove cue-sheet
-    _remove_cuesheet "${cuesheet}"
 
     rm -f "${MCP_PID_FILE}" "${STATE_FILE}"
 
