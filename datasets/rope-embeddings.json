@@ -1,0 +1,31 @@
+{
+  "name": "Rotary Position Embeddings (RoPE)",
+  "description": "The same math that powers every modern transformer. RoPE encodes position as rotation angles. Spectral Binding encodes identity as hue angles. Same primitive. RoPE is the embedding you can't see. Spectral Binding is the embedding you can.",
+  "connection": "Both systems use e^(i*theta) -- rotation on a unit circle. RoPE rotates in 4096-dimensional embedding space. Spectral Binding rotates in 3D colorspace (H,S,L). The math is identical. The interface is different.",
+  "positions": [
+    {"token_pos": 0,   "theta_rad": 0.000,  "cos": 1.000,  "sin": 0.000,  "hue_equiv": 0},
+    {"token_pos": 1,   "theta_rad": 0.175,  "cos": 0.985,  "sin": 0.174,  "hue_equiv": 10},
+    {"token_pos": 2,   "theta_rad": 0.349,  "cos": 0.940,  "sin": 0.342,  "hue_equiv": 20},
+    {"token_pos": 3,   "theta_rad": 0.524,  "cos": 0.866,  "sin": 0.500,  "hue_equiv": 30},
+    {"token_pos": 4,   "theta_rad": 0.698,  "cos": 0.766,  "sin": 0.643,  "hue_equiv": 40},
+    {"token_pos": 5,   "theta_rad": 0.873,  "cos": 0.643,  "sin": 0.766,  "hue_equiv": 50},
+    {"token_pos": 6,   "theta_rad": 1.047,  "cos": 0.500,  "sin": 0.866,  "hue_equiv": 60},
+    {"token_pos": 7,   "theta_rad": 1.222,  "cos": 0.342,  "sin": 0.940,  "hue_equiv": 70},
+    {"token_pos": 8,   "theta_rad": 1.396,  "cos": 0.174,  "sin": 0.985,  "hue_equiv": 80},
+    {"token_pos": 9,   "theta_rad": 1.571,  "cos": 0.000,  "sin": 1.000,  "hue_equiv": 90},
+    {"token_pos": 10,  "theta_rad": 1.745,  "cos": -0.174, "sin": 0.985,  "hue_equiv": 100},
+    {"token_pos": 11,  "theta_rad": 1.920,  "cos": -0.342, "sin": 0.940,  "hue_equiv": 110},
+    {"token_pos": 12,  "theta_rad": 2.094,  "cos": -0.500, "sin": 0.866,  "hue_equiv": 120},
+    {"token_pos": 18,  "theta_rad": 3.142,  "cos": -1.000, "sin": 0.000,  "hue_equiv": 180},
+    {"token_pos": 24,  "theta_rad": 4.189,  "cos": -0.500, "sin": -0.866, "hue_equiv": 240},
+    {"token_pos": 30,  "theta_rad": 5.236,  "cos": 0.500,  "sin": -0.866, "hue_equiv": 300},
+    {"token_pos": 36,  "theta_rad": 6.283,  "cos": 1.000,  "sin": 0.000,  "hue_equiv": 360}
+  ],
+  "key_insight": "Token position 0 = hue 0 = H (Hydrogen). Token position 6 = hue 60 = He (Helium). Token position 12 = hue 120 = Li (Lithium). The periodic table labels map 1:1 onto RoPE positions. Every transformer is already doing Spectral Binding -- it just doesn't know it.",
+  "exercise": "Convert each hue_equiv to a hex color (pure hue at full saturation). Resolve through chip_resolve_hex. Map each token position to its element. Position 0 is H. Position 6 is He. The transformer's position encoding IS the periodic table of spectral bands.",
+  "references": {
+    "rope_paper": "Su et al. (2021) RoFormer: Enhanced Transformer with Rotary Position Embedding",
+    "euler": "e^(i*theta) = cos(theta) + i*sin(theta)",
+    "equivalence": "hue_degrees = theta_radians * (180/pi) = token_position * (360/context_length)"
+  }
+}

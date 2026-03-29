@@ -1,0 +1,24 @@
+{
+  "name": "Mathematical Constants",
+  "description": "Numbers that exist independent of the universe. Pi exists whether or not there are circles. e exists whether or not things grow. These numbers weren't discovered in nature -- they were discovered in logic. They are true in every possible universe. Where does pure math live in spectral space?",
+  "constants": [
+    {"symbol": "pi",       "name": "Pi",                      "value": 3.14159265358979,  "domain": "geometry",    "note": "Ratio of circumference to diameter. The most famous number. Shows up everywhere circles hide."},
+    {"symbol": "e",        "name": "Eulers Number",           "value": 2.71828182845905,  "domain": "growth",      "note": "Base of natural logarithm. The rate at which things compound. e^(i*pi) + 1 = 0."},
+    {"symbol": "phi",      "name": "Golden Ratio",            "value": 1.61803398874989,  "domain": "proportion",  "note": "The number that is its own reciprocal plus one. Fibonacci spirals converge to this."},
+    {"symbol": "sqrt2",    "name": "Square Root of Two",      "value": 1.41421356237310,  "domain": "geometry",    "note": "Diagonal of a unit square. First proven irrational number. Killed a man (Hippasus)."},
+    {"symbol": "gamma",    "name": "Euler-Mascheroni",        "value": 0.57721566490153,  "domain": "number theory","note": "The gap between the harmonic series and the natural log. Nobody knows if it is rational."},
+    {"symbol": "delta_F",  "name": "Feigenbaum Delta",        "value": 4.66920160910299,  "domain": "chaos",       "note": "Universal ratio in period-doubling cascades. Same number in every chaotic system. The fingerprint of chaos."},
+    {"symbol": "alpha_F",  "name": "Feigenbaum Alpha",        "value": 2.50290787509589,  "domain": "chaos",       "note": "Scaling factor for spacing of tines. Partner to delta."},
+    {"symbol": "zeta3",    "name": "Aperys Constant",         "value": 1.20205690315959,  "domain": "number theory","note": "zeta(3). Proven irrational in 1978. Appears in quantum electrodynamics."},
+    {"symbol": "K",        "name": "Khinchins Constant",      "value": 2.68545200106531,  "domain": "number theory","note": "Almost every real number's continued fraction coefficients have this geometric mean. Almost every. Not all."},
+    {"symbol": "omega",    "name": "Omega Constant",          "value": 0.56714329040978,  "domain": "analysis",    "note": "W(1) where W is the Lambert W function. The number that satisfies omega * e^omega = 1."},
+    {"symbol": "tau",      "name": "Tau",                     "value": 6.28318530717959,  "domain": "geometry",    "note": "2*pi. One full turn. The argument for tau over pi is that circles have one natural constant, not half of one."},
+    {"symbol": "i",        "name": "Imaginary Unit",          "value": "sqrt(-1)",        "domain": "complex",     "note": "Not a real number. Rotates the number line into a plane. Without i, there is no Euler identity, no quantum mechanics, no signal processing."},
+    {"symbol": "0",        "name": "Zero",                    "value": 0,                 "domain": "arithmetic",  "note": "Nothing. The additive identity. Took humanity thousands of years to invent. The most dangerous number."},
+    {"symbol": "1",        "name": "One",                     "value": 1,                 "domain": "arithmetic",  "note": "The multiplicative identity. The unit. Everything starts here."},
+    {"symbol": "inf",      "name": "Infinity",                "value": "undefined",       "domain": "set theory",  "note": "Not a number. A concept. There are different sizes of infinity (Cantor). Some infinities are bigger than others."},
+    {"symbol": "aleph_0",  "name": "Aleph Null",              "value": "countable infinity","domain": "set theory", "note": "The size of the natural numbers. The smallest infinity. You can list them: 1, 2, 3... forever."},
+    {"symbol": "c_cont",   "name": "Cardinality of Continuum","value": "uncountable infinity","domain": "set theory","note": "The size of the real numbers. Bigger than aleph null. You cannot list them. Cantor proved this with a diagonal argument."}
+  ],
+  "exercise": "Hash each constant name to hex. Resolve through chip_resolve_hex. Do the geometry constants (pi, tau, sqrt2) cluster? Do the chaos constants (Feigenbaum delta, alpha) land near each other? Where does Zero land vs Infinity? Find the midpoint between Pi and Eulers Number -- the two most important constants. What is the color of e^(i*pi) + 1 = 0?"
+}

@@ -1,0 +1,87 @@
+{
+  "name": "Atmospheric Rainbow -- Refraction Physics",
+  "description": "A rainbow is white light decomposed by water droplets into its spectral components. Each color exits the droplet at a specific refraction angle (Snell's law). The angle IS the wavelength IS the color IS the spectral address. Physics, optics, meteorology, and Spectral Binding are the same measurement.",
+  "physics": {
+    "mechanism": "Sunlight enters a spherical water droplet, refracts at the air-water boundary (n=1.333), reflects off the back surface, refracts again on exit. Each wavelength bends at a slightly different angle because the refractive index varies with wavelength (dispersion).",
+    "snells_law": "n1 * sin(theta1) = n2 * sin(theta2)",
+    "refractive_index_water": {
+      "red_700nm": 1.3300,
+      "orange_620nm": 1.3320,
+      "yellow_580nm": 1.3334,
+      "green_530nm": 1.3350,
+      "blue_470nm": 1.3378,
+      "violet_400nm": 1.3435
+    },
+    "note": "Higher refractive index = more bending = violet on the inside of the arc, red on the outside"
+  },
+  "bands": [
+    {
+      "color": "Red",
+      "wavelength_nm": 700,
+      "frequency_thz": 428,
+      "refraction_angle_deg": 42.4,
+      "refractive_index": 1.3300,
+      "hex": "#FF0000",
+      "arc_position": "outermost"
+    },
+    {
+      "color": "Orange",
+      "wavelength_nm": 620,
+      "frequency_thz": 484,
+      "refraction_angle_deg": 42.0,
+      "refractive_index": 1.3320,
+      "hex": "#FF7F00",
+      "arc_position": "outer"
+    },
+    {
+      "color": "Yellow",
+      "wavelength_nm": 580,
+      "frequency_thz": 517,
+      "refraction_angle_deg": 41.7,
+      "refractive_index": 1.3334,
+      "hex": "#FFFF00",
+      "arc_position": "upper middle"
+    },
+    {
+      "color": "Green",
+      "wavelength_nm": 530,
+      "frequency_thz": 566,
+      "refraction_angle_deg": 41.2,
+      "refractive_index": 1.3350,
+      "hex": "#00FF00",
+      "arc_position": "middle"
+    },
+    {
+      "color": "Blue",
+      "wavelength_nm": 470,
+      "frequency_thz": 638,
+      "refraction_angle_deg": 40.7,
+      "refractive_index": 1.3378,
+      "hex": "#0000FF",
+      "arc_position": "lower middle"
+    },
+    {
+      "color": "Indigo",
+      "wavelength_nm": 435,
+      "frequency_thz": 689,
+      "refraction_angle_deg": 40.4,
+      "refractive_index": 1.3400,
+      "hex": "#4B0082",
+      "arc_position": "inner"
+    },
+    {
+      "color": "Violet",
+      "wavelength_nm": 400,
+      "frequency_thz": 750,
+      "refraction_angle_deg": 40.0,
+      "refractive_index": 1.3435,
+      "hex": "#8B00FF",
+      "arc_position": "innermost"
+    }
+  ],
+  "secondary_rainbow": {
+    "description": "Light reflects TWICE inside the droplet. Colors are reversed (red inside, violet outside). Angle is 50-53 degrees. The dark band between primary and secondary is Alexander's dark band (1.3 degrees wide).",
+    "alexanders_band": "No light exits between 42.4 and 50.0 degrees. This is visible as the dark sky between the two rainbows."
+  },
+  "exercise": "Resolve each band's hex through chip_resolve_hex. The rainbow IS the hue wheel IS the spectral band registry. Red=H, Yellow=He, Green=Li, Blue=B. The refraction angle decreases as wavelength decreases -- the refractive index increases. Find the midpoint between Red and Violet. That's the color at the center of the rainbow. What element band does it land in?"
+}

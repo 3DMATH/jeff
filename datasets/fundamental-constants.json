@@ -1,0 +1,28 @@
+{
+  "name": "Fundamental Constants of the Universe",
+  "description": "The numbers that define reality. Speed of light, gravitational constant, Planck's constant, Boltzmann's constant. These are not chosen -- they are measured. They cannot be derived from each other. They are the axioms of physics. Hash them and see where the universe puts itself.",
+  "connection": "Spectral Binding says addresses are discovered, not assigned. These constants were discovered, not assigned. Nobody chose c = 299,792,458 m/s. The universe chose it. Where does the universe's own address land?",
+  "constants": [
+    {"symbol": "c",       "name": "Speed of Light",                "value": "299792458 m/s",           "domain": "electromagnetism",   "note": "The speed limit. Nothing with mass can reach it."},
+    {"symbol": "G",       "name": "Gravitational Constant",        "value": "6.674e-11 m3/kg/s2",     "domain": "gravity",            "note": "How strongly mass attracts mass. Weakest force."},
+    {"symbol": "h",       "name": "Planck Constant",               "value": "6.626e-34 J*s",          "domain": "quantum mechanics",  "note": "The minimum action. Reality is granular below this."},
+    {"symbol": "k_B",     "name": "Boltzmann Constant",            "value": "1.381e-23 J/K",          "domain": "thermodynamics",     "note": "Bridge between energy and temperature."},
+    {"symbol": "e",       "name": "Elementary Charge",             "value": "1.602e-19 C",            "domain": "electromagnetism",   "note": "The charge of one proton. Quantized."},
+    {"symbol": "alpha",   "name": "Fine Structure Constant",       "value": "1/137.036",              "domain": "quantum",            "note": "Strength of electromagnetic interaction. Dimensionless. If it were different, atoms wouldn't form."},
+    {"symbol": "m_e",     "name": "Electron Mass",                 "value": "9.109e-31 kg",           "domain": "particle physics",   "note": "Lightest charged particle."},
+    {"symbol": "m_p",     "name": "Proton Mass",                   "value": "1.673e-27 kg",           "domain": "particle physics",   "note": "1836 times heavier than electron. Nobody knows why."},
+    {"symbol": "N_A",     "name": "Avogadro Number",               "value": "6.022e23 /mol",          "domain": "chemistry",          "note": "Bridge between atomic and human scale."},
+    {"symbol": "R",       "name": "Gas Constant",                  "value": "8.314 J/mol/K",          "domain": "thermodynamics",     "note": "k_B times N_A. Macro version of Boltzmann."},
+    {"symbol": "sigma",   "name": "Stefan-Boltzmann Constant",     "value": "5.670e-8 W/m2/K4",      "domain": "radiation",          "note": "How fast hot things radiate. Stars obey this."},
+    {"symbol": "H_0",     "name": "Hubble Constant",               "value": "67.4 km/s/Mpc",         "domain": "cosmology",          "note": "Rate of expansion of the universe. Still debated."},
+    {"symbol": "Lambda",  "name": "Cosmological Constant",         "value": "1.1e-52 /m2",           "domain": "cosmology",          "note": "Dark energy density. 70% of the universe is this and we don't know what it is."},
+    {"symbol": "T_CMB",   "name": "CMB Temperature",               "value": "2.725 K",               "domain": "cosmology",          "note": "Temperature of the universe. Afterglow of the Big Bang. Measured everywhere, same in every direction."}
+  ],
+  "black_holes": [
+    {"name": "Schwarzschild Radius",    "formula": "r_s = 2GM/c^2",                "note": "The point of no return. Below this radius, escape velocity exceeds c. Space and time swap roles."},
+    {"name": "Hawking Temperature",     "formula": "T = hc^3 / (8*pi*G*M*k_B)",   "note": "Black holes radiate. Temperature is inversely proportional to mass. Small black holes are hot. Stellar ones are colder than the CMB."},
+    {"name": "Bekenstein-Hawking Entropy","formula": "S = k_B*c^3*A / (4*G*h)",    "note": "Entropy is proportional to surface area, not volume. Information lives on the boundary. This is the holographic principle."},
+    {"name": "Chandrasekhar Limit",     "formula": "1.4 solar masses",             "note": "Above this mass, electron degeneracy pressure fails. The star collapses. White dwarf becomes neutron star or black hole."}
+  ],
+  "exercise": "Hash each constant name to hex. Resolve through chip_resolve_hex. Do the cosmological constants cluster? Do the quantum ones? Find the midpoint between Speed of Light and Gravitational Constant -- the two forces that define spacetime. What element band is the bridge between light and gravity?"
+}

@@ -1,0 +1,26 @@
+{
+  "name": "Plutchik's Wheel of Emotions",
+  "description": "Robert Plutchik (1980) arranged 8 primary emotions on a color wheel. He assigned colors to emotions BEFORE anyone connected color to computation. We can check if the spectral system agrees with the psychologist. Did Plutchik discover spectral binding 46 years early?",
+  "connection": "Plutchik assigned: Joy=Yellow, Trust=Green, Fear=Green, Surprise=Blue, Sadness=Blue, Disgust=Purple, Anger=Red, Anticipation=Orange. These are EXACTLY the warm-to-cool progression of the hue wheel. He was doing spectral binding with crayons.",
+  "primary_emotions": [
+    {"emotion": "Joy",           "plutchik_color": "yellow",  "plutchik_hue_approx": 60,  "intensity_low": "serenity",      "intensity_high": "ecstasy"},
+    {"emotion": "Trust",         "plutchik_color": "green",   "plutchik_hue_approx": 120, "intensity_low": "acceptance",    "intensity_high": "admiration"},
+    {"emotion": "Fear",          "plutchik_color": "green",   "plutchik_hue_approx": 150, "intensity_low": "apprehension",  "intensity_high": "terror"},
+    {"emotion": "Surprise",      "plutchik_color": "blue",    "plutchik_hue_approx": 210, "intensity_low": "distraction",   "intensity_high": "amazement"},
+    {"emotion": "Sadness",       "plutchik_color": "blue",    "plutchik_hue_approx": 240, "intensity_low": "pensiveness",   "intensity_high": "grief"},
+    {"emotion": "Disgust",       "plutchik_color": "purple",  "plutchik_hue_approx": 300, "intensity_low": "boredom",       "intensity_high": "loathing"},
+    {"emotion": "Anger",         "plutchik_color": "red",     "plutchik_hue_approx": 0,   "intensity_low": "annoyance",     "intensity_high": "rage"},
+    {"emotion": "Anticipation",  "plutchik_color": "orange",  "plutchik_hue_approx": 30,  "intensity_low": "interest",      "intensity_high": "vigilance"}
+  ],
+  "composite_emotions": [
+    {"name": "Love",         "components": ["Joy", "Trust"],          "description": "joy + trust"},
+    {"name": "Submission",   "components": ["Trust", "Fear"],         "description": "trust + fear"},
+    {"name": "Awe",          "components": ["Fear", "Surprise"],      "description": "fear + surprise"},
+    {"name": "Disapproval",  "components": ["Surprise", "Sadness"],   "description": "surprise + sadness"},
+    {"name": "Remorse",      "components": ["Sadness", "Disgust"],    "description": "sadness + disgust"},
+    {"name": "Contempt",     "components": ["Disgust", "Anger"],      "description": "disgust + anger"},
+    {"name": "Aggressiveness","components": ["Anger", "Anticipation"],"description": "anger + anticipation"},
+    {"name": "Optimism",     "components": ["Anticipation", "Joy"],   "description": "anticipation + joy"}
+  ],
+  "exercise": "Hash each emotion name to hex. Resolve through chip_resolve_hex. Compare the HASH position to Plutchik's ASSIGNED position. Do they correlate? Then: use chip_midpoint on each composite pair (Joy+Trust=Love, etc). Does the midpoint of Joy and Trust land near where Love 'should' be? Plutchik said composites are blends of adjacent primaries -- spectral binding says the midpoint of two addresses is computable. Same operation."
+}

@@ -1,0 +1,19 @@
+{
+  "name": "Chromatic Scale",
+  "description": "12 musical notes hashed to spectral addresses. Music is frequency. Spectral Binding sorts frequencies.",
+  "items": [
+    {"note": "C",  "frequency_hz": 261.63},
+    {"note": "C#", "frequency_hz": 277.18},
+    {"note": "D",  "frequency_hz": 293.66},
+    {"note": "D#", "frequency_hz": 311.13},
+    {"note": "E",  "frequency_hz": 329.63},
+    {"note": "F",  "frequency_hz": 349.23},
+    {"note": "F#", "frequency_hz": 369.99},
+    {"note": "G",  "frequency_hz": 392.00},
+    {"note": "G#", "frequency_hz": 415.30},
+    {"note": "A",  "frequency_hz": 440.00},
+    {"note": "A#", "frequency_hz": 466.16},
+    {"note": "B",  "frequency_hz": 493.88}
+  ],
+  "exercise": "Hash each note name to hex via tool_chain.tool_to_hex(). Resolve each through chip_resolve_hex. Do they cluster? Do sharps land near their naturals? What band does A440 land in?"
+}

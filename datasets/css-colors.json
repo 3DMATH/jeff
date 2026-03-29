@@ -1,0 +1,28 @@
+{
+  "name": "CSS Named Colors",
+  "description": "Color names resolved through the spectral system. The input IS a color. The output IS a spectral position. Does the system sort colors by their own nature?",
+  "items": [
+    {"name": "red",        "hex": "#FF0000"},
+    {"name": "orange",     "hex": "#FFA500"},
+    {"name": "yellow",     "hex": "#FFFF00"},
+    {"name": "green",      "hex": "#008000"},
+    {"name": "cyan",       "hex": "#00FFFF"},
+    {"name": "blue",       "hex": "#0000FF"},
+    {"name": "purple",     "hex": "#800080"},
+    {"name": "pink",       "hex": "#FFC0CB"},
+    {"name": "white",      "hex": "#FFFFFF"},
+    {"name": "black",      "hex": "#000000"},
+    {"name": "coral",      "hex": "#FF7F50"},
+    {"name": "teal",       "hex": "#008080"},
+    {"name": "gold",       "hex": "#FFD700"},
+    {"name": "navy",       "hex": "#000080"},
+    {"name": "salmon",     "hex": "#FA8072"},
+    {"name": "olive",      "hex": "#808000"},
+    {"name": "maroon",     "hex": "#800000"},
+    {"name": "aquamarine", "hex": "#7FFFD4"},
+    {"name": "indigo",     "hex": "#4B0082"},
+    {"name": "crimson",    "hex": "#DC143C"},
+    {"name": "lavender",   "hex": "#E6E6FA"}
+  ],
+  "exercise": "Resolve each hex through chip_resolve_hex. Which element band does each color land in? Do warm colors cluster together? Do cool colors? What about white and black (no hue)? Find the midpoint between red and blue. What element path does it produce?"
+}

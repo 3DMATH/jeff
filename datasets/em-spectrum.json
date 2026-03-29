@@ -1,0 +1,25 @@
+{
+  "name": "Electromagnetic Spectrum",
+  "description": "The original spectrum. Spectral Binding sorting the thing it's named after. Frequencies in Hz, wavelengths in meters.",
+  "items": [
+    {"band": "ELF",              "frequency_hz": 30,           "wavelength_m": 10000000,   "use": "submarine communication"},
+    {"band": "VLF",              "frequency_hz": 10000,        "wavelength_m": 30000,      "use": "navigation"},
+    {"band": "AM Radio",         "frequency_hz": 1000000,      "wavelength_m": 300,        "use": "broadcast"},
+    {"band": "FM Radio",         "frequency_hz": 100000000,    "wavelength_m": 3,          "use": "broadcast"},
+    {"band": "Microwave",        "frequency_hz": 2450000000,   "wavelength_m": 0.122,      "use": "cooking, radar"},
+    {"band": "Millimeter Wave",  "frequency_hz": 30000000000,  "wavelength_m": 0.01,       "use": "5G, imaging"},
+    {"band": "Far Infrared",     "frequency_hz": 3e12,         "wavelength_m": 0.0001,     "use": "thermal imaging"},
+    {"band": "Near Infrared",    "frequency_hz": 3e14,         "wavelength_m": 0.000001,   "use": "remote controls, fiber"},
+    {"band": "Red Light",        "frequency_hz": 4.3e14,       "wavelength_m": 7e-7,       "use": "visible"},
+    {"band": "Green Light",      "frequency_hz": 5.7e14,       "wavelength_m": 5.3e-7,     "use": "visible"},
+    {"band": "Blue Light",       "frequency_hz": 6.8e14,       "wavelength_m": 4.4e-7,     "use": "visible"},
+    {"band": "Violet Light",     "frequency_hz": 7.5e14,       "wavelength_m": 4e-7,       "use": "visible"},
+    {"band": "UV-A",             "frequency_hz": 8.5e14,       "wavelength_m": 3.5e-7,     "use": "tanning, curing"},
+    {"band": "UV-C",             "frequency_hz": 1.5e15,       "wavelength_m": 2e-7,       "use": "sterilization"},
+    {"band": "Soft X-ray",       "frequency_hz": 3e16,         "wavelength_m": 1e-8,       "use": "medical imaging"},
+    {"band": "Hard X-ray",       "frequency_hz": 3e18,         "wavelength_m": 1e-10,      "use": "crystallography"},
+    {"band": "Gamma Ray",        "frequency_hz": 3e20,         "wavelength_m": 1e-12,      "use": "nuclear, cosmic"},
+    {"band": "High Gamma",       "frequency_hz": 3e25,         "wavelength_m": 1e-17,      "use": "cosmic rays"}
+  ],
+  "exercise": "Hash each band name to hex. Resolve through chip_resolve_hex. The electromagnetic spectrum IS a spectrum -- does the spectral system sort it into a coherent order? Find the midpoint between Radio and Gamma. What element path do visible light frequencies land in?"
+}

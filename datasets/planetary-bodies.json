@@ -1,0 +1,29 @@
+{
+  "name": "Planetary Bodies",
+  "description": "Every planet type in the universe hashed to spectral addresses. From rocky worlds to gas giants to exotic objects. Astronomers classify by composition and temperature -- both are spectra. The spectrograph IS spectral binding applied to starlight.",
+  "connection": "Astronomers literally identify planetary composition by spectral absorption lines -- which wavelengths of light the atmosphere absorbs. A planet's spectrum IS its address. We're doing the same thing with hex.",
+  "bodies": [
+    {"name": "Mercury",       "type": "rocky",          "mass_earths": 0.055,   "temp_k": 440,   "note": "iron core, no atmosphere"},
+    {"name": "Venus",         "type": "rocky",          "mass_earths": 0.815,   "temp_k": 737,   "note": "runaway greenhouse"},
+    {"name": "Earth",         "type": "rocky",          "mass_earths": 1.0,     "temp_k": 288,   "note": "liquid water"},
+    {"name": "Mars",          "type": "rocky",          "mass_earths": 0.107,   "temp_k": 210,   "note": "iron oxide surface"},
+    {"name": "Jupiter",       "type": "gas giant",      "mass_earths": 317.8,   "temp_k": 165,   "note": "hydrogen/helium, Great Red Spot"},
+    {"name": "Saturn",        "type": "gas giant",      "mass_earths": 95.2,    "temp_k": 134,   "note": "hydrogen/helium, rings"},
+    {"name": "Uranus",        "type": "ice giant",      "mass_earths": 14.5,    "temp_k": 76,    "note": "methane atmosphere, tilted 98 degrees"},
+    {"name": "Neptune",       "type": "ice giant",      "mass_earths": 17.1,    "temp_k": 72,    "note": "methane blue, fastest winds"},
+    {"name": "Pluto",         "type": "dwarf planet",   "mass_earths": 0.002,   "temp_k": 44,    "note": "nitrogen ice, Kuiper belt"},
+    {"name": "Europa",        "type": "icy moon",       "mass_earths": 0.008,   "temp_k": 102,   "note": "subsurface ocean under ice shell"},
+    {"name": "Titan",         "type": "icy moon",       "mass_earths": 0.023,   "temp_k": 94,    "note": "methane lakes, thick atmosphere"},
+    {"name": "Io",            "type": "volcanic moon",  "mass_earths": 0.015,   "temp_k": 130,   "note": "most volcanically active body"},
+    {"name": "Ceres",         "type": "dwarf planet",   "mass_earths": 0.0002,  "temp_k": 168,   "note": "asteroid belt, water ice"},
+    {"name": "Hot Jupiter",   "type": "exoplanet",      "mass_earths": 500,     "temp_k": 1500,  "note": "gas giant orbiting close to star"},
+    {"name": "Super Earth",   "type": "exoplanet",      "mass_earths": 5,       "temp_k": 300,   "note": "rocky, larger than Earth"},
+    {"name": "Mini Neptune",  "type": "exoplanet",      "mass_earths": 10,      "temp_k": 500,   "note": "thick hydrogen envelope"},
+    {"name": "Rogue Planet",  "type": "exoplanet",      "mass_earths": 3,       "temp_k": 30,    "note": "no star, drifting through interstellar space"},
+    {"name": "Pulsar Planet", "type": "exotic",         "mass_earths": 4,       "temp_k": 0,     "note": "orbiting a dead neutron star"},
+    {"name": "Carbon Planet", "type": "exotic",         "mass_earths": 2,       "temp_k": 400,   "note": "diamond core, graphite surface"},
+    {"name": "Iron Planet",   "type": "exotic",         "mass_earths": 1.5,     "temp_k": 2000,  "note": "stripped mantle, pure iron"},
+    {"name": "Ocean World",   "type": "exotic",         "mass_earths": 3,       "temp_k": 280,   "note": "global ocean hundreds of km deep"}
+  ],
+  "exercise": "Hash each body name to hex. Resolve through chip_resolve_hex. Do rocky planets cluster? Do gas giants? Do exoplanet types land in different bands than solar system bodies? Find the midpoint between Earth and Jupiter. What's the element address of the boundary between rocky and gas?"
+}
