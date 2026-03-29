@@ -122,22 +122,46 @@ MEOF
 mkdir -p "${VOLUME_PATH}/models"
 if command -v ollama &>/dev/null; then
     echo "        Checking for model: ${MODEL_NAME}"
-    OLLAMA_BLOB_DIR="${HOME}/.ollama/models"
-    MODEL_MANIFEST=$(ollama show "${MODEL_NAME}" --modelfile 2>/dev/null | head -1 | sed 's/^FROM //')
-    if [[ -n "${MODEL_MANIFEST}" ]] && [[ -f "${MODEL_MANIFEST}" ]]; then
-        echo "        Exporting model to card (this may take a moment)..."
-        cp "${MODEL_MANIFEST}" "${VOLUME_PATH}/models/$(basename "${MODEL_MANIFEST}")"
-        echo "        Model copied to models/"
-    else
-        # Try to find the blob directly
+    BLOB_PATH=$(ollama show "${MODEL_NAME}" --modelfile 2>/dev/null | head -1 | sed 's/^FROM //')
+    if [[ -z "${BLOB_PATH}" ]] || [[ ! -f "${BLOB_PATH}" ]]; then
         BLOB_PATH=$(ollama show "${MODEL_NAME}" --modelfile 2>/dev/null | grep "^FROM " | sed 's/^FROM //')
-        if [[ -n "${BLOB_PATH}" ]] && [[ -f "${BLOB_PATH}" ]]; then
-            echo "        Exporting model to card (this may take a moment)..."
-            cp "${BLOB_PATH}" "${VOLUME_PATH}/models/$(basename "${BLOB_PATH}")"
-            echo "        Model copied to models/"
-        else
-            warn "Model ${MODEL_NAME} not found locally -- run 'ollama pull ${MODEL_NAME}' then re-flash"
-        fi
+    fi
+    if [[ -n "${BLOB_PATH}" ]] && [[ -f "${BLOB_PATH}" ]]; then
+        DEST="${VOLUME_PATH}/models/$(basename "${BLOB_PATH}")"
+        python3 - "${BLOB_PATH}" "${DEST}" << 'PYEOF'
+import sys, os, time
+
+src, dst = sys.argv[1], sys.argv[2]
+total = os.path.getsize(src)
+copied = 0
+chunk = 1024 * 1024  # 1MB chunks
+bar_width = 40
+
+def fmt_size(n):
+    if n >= 1_000_000_000:
+        return "%.1fGB" % (n / 1_000_000_000)
+    if n >= 1_000_000:
+        return "%.0fMB" % (n / 1_000_000)
+    return "%.0fKB" % (n / 1_000)
+
+with open(src, "rb") as fin, open(dst, "wb") as fout:
+    while True:
+        data = fin.read(chunk)
+        if not data:
+            break
+        fout.write(data)
+        copied += len(data)
+        pct = copied / total
+        filled = int(bar_width * pct)
+        bar = "#" * filled + "-" * (bar_width - filled)
+        sys.stdout.write("\r        [%s] %3d%% %s / %s" % (bar, pct * 100, fmt_size(copied), fmt_size(total)))
+        sys.stdout.flush()
+
+sys.stdout.write("\n")
+print("        Model copied to models/")
+PYEOF
+    else
+        warn "Model ${MODEL_NAME} not found locally -- run 'ollama pull ${MODEL_NAME}' then re-flash"
     fi
 else
     warn "Ollama not installed -- models/ will be empty"
