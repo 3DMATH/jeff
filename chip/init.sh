@@ -97,30 +97,57 @@ echo "  [1/5] Device: ${DEVICE_ID:0:8}"
 # STEP 2: Copy MCP server to card surface
 # ============================================================
 
-echo "  [2/5] Copying MCP server to card..."
+echo "  [2/5] Copying files to card surface..."
 
+# MCP server (the card IS the computer)
 mkdir -p "${VOLUME_PATH}/mcp"
 cp "${JEFF_DIR}/chip/mcp_server.py" "${VOLUME_PATH}/mcp/server.py"
 cp "${JEFF_DIR}/spectral/spectral.py" "${VOLUME_PATH}/mcp/spectral.py"
 cp "${JEFF_DIR}/spectral/tool_chain.py" "${VOLUME_PATH}/mcp/tool_chain.py"
 cp "${JEFF_DIR}/chip/inference.py" "${VOLUME_PATH}/mcp/inference.py"
 
-# Copy the paper
+# Hidden docs directory -- easter egg
+mkdir -p "${VOLUME_PATH}/.jeff/docs"
 if [[ -f "${JEFF_DIR}/spectral/spectral-binding.md" ]]; then
-    cp "${JEFF_DIR}/spectral/spectral-binding.md" "${VOLUME_PATH}/spectral-binding.md"
+    cp "${JEFF_DIR}/spectral/spectral-binding.md" "${VOLUME_PATH}/.jeff/docs/spectral-binding.md"
 fi
 
-# Write Modelfile
+# Modelfile
 cat > "${VOLUME_PATH}/Modelfile" << MEOF
 FROM ${MODEL_NAME}
-SYSTEM You are Jeff, running on a Booster Chip. You understand Spectral Binding. Answer concisely.
+SYSTEM You are Jeff, running on a Booster Chip. You understand Spectral Binding -- the measurement axiom that maps any namespace to a continuous colorspace address using 7-21 perceivable bands per zoom level, labeled with periodic table elements. Answer concisely. When asked about Spectral Binding, explain clearly from first principles.
 MEOF
+
+# Model weights -- export from Ollama if available
+mkdir -p "${VOLUME_PATH}/models"
+if command -v ollama &>/dev/null; then
+    echo "        Checking for model: ${MODEL_NAME}"
+    OLLAMA_BLOB_DIR="${HOME}/.ollama/models"
+    MODEL_MANIFEST=$(ollama show "${MODEL_NAME}" --modelfile 2>/dev/null | head -1 | sed 's/^FROM //')
+    if [[ -n "${MODEL_MANIFEST}" ]] && [[ -f "${MODEL_MANIFEST}" ]]; then
+        echo "        Exporting model to card (this may take a moment)..."
+        cp "${MODEL_MANIFEST}" "${VOLUME_PATH}/models/$(basename "${MODEL_MANIFEST}")"
+        echo "        Model copied to models/"
+    else
+        # Try to find the blob directly
+        BLOB_PATH=$(ollama show "${MODEL_NAME}" --modelfile 2>/dev/null | grep "^FROM " | sed 's/^FROM //')
+        if [[ -n "${BLOB_PATH}" ]] && [[ -f "${BLOB_PATH}" ]]; then
+            echo "        Exporting model to card (this may take a moment)..."
+            cp "${BLOB_PATH}" "${VOLUME_PATH}/models/$(basename "${BLOB_PATH}")"
+            echo "        Model copied to models/"
+        else
+            warn "Model ${MODEL_NAME} not found locally -- run 'ollama pull ${MODEL_NAME}' then re-flash"
+        fi
+    fi
+else
+    warn "Ollama not installed -- models/ will be empty"
+fi
 
 echo "        mcp/server.py"
 echo "        mcp/spectral.py"
 echo "        mcp/tool_chain.py"
 echo "        mcp/inference.py"
-echo "        spectral-binding.md"
+echo "        .jeff/docs/spectral-binding.md"
 echo "        Modelfile"
 
 # ============================================================
@@ -280,7 +307,8 @@ echo "        Vault created and sealed"
 
 echo "  [5/5] Verifying..."
 
-FILE_COUNT=$(find "${VOLUME_PATH}" -not -name ".*" -type f | wc -l | tr -d ' ')
+FILE_COUNT=$(find "${VOLUME_PATH}" -type f | wc -l | tr -d ' ')
+MODEL_COUNT=$(find "${VOLUME_PATH}/models" -type f 2>/dev/null | wc -l | tr -d ' ')
 
 echo ""
 echo "  ============================="
@@ -288,13 +316,15 @@ echo "  Chip ready: ${LABEL}"
 echo "  ============================="
 echo "  Device:   ${DEVICE_ID:0:8}"
 echo "  Files:    ${FILE_COUNT} on card surface"
+echo "  Models:   ${MODEL_COUNT} in models/"
 echo "  Vault:    vault.sparseimage (AES-256)"
 echo "  Path:     ${VOLUME_PATH}"
 echo ""
 echo "  Card layout:"
 echo "    heartbeat.json        identity"
-echo "    mcp/server.py         MCP server (runs from card)"
-echo "    spectral-binding.md   the paper"
+echo "    mcp/                  MCP server (runs from card)"
+echo "    models/               model weights"
+echo "    .jeff/docs/            hidden reference docs"
 echo "    Modelfile             model config"
 echo "    vault.sparseimage     encrypted vault"
 echo ""

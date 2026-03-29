@@ -65,12 +65,14 @@ def chip_status():
 def chip_read_card(filename: str = ""):
     """Read a file from the card surface (no vault needed).
 
-    Files on the card root are unencrypted and always readable
-    when the card is plugged in. This is how the chip shares
-    public content like papers, specs, and documentation.
+    Files on the card are unencrypted and always readable when
+    the card is plugged in. Supports subdirectory paths like
+    .jeff/docs/spectral-binding.md for hidden reference docs.
 
     Args:
         filename: File to read. Empty to list all files on the card.
+                  Use a path like .jeff/docs/spectral-binding.md for
+                  files in subdirectories.
     """
     if not VOLUME_PATH or not os.path.isdir(VOLUME_PATH):
         return json.dumps({"error": "No card volume available"})
@@ -78,7 +80,7 @@ def chip_read_card(filename: str = ""):
     if not filename:
         files = []
         for f in sorted(os.listdir(VOLUME_PATH)):
-            if f.startswith("."):
+            if f.startswith(".") and f != ".jeff":
                 continue
             full = os.path.join(VOLUME_PATH, f)
             if os.path.isfile(full):
@@ -87,11 +89,23 @@ def chip_read_card(filename: str = ""):
                 files.append({"name": f + "/", "type": "directory"})
         return json.dumps({"volume": VOLUME_PATH, "files": files}, indent=2)
 
-    safe_name = os.path.basename(filename)
-    path = os.path.join(VOLUME_PATH, safe_name)
+    # Resolve path safely -- prevent traversal above volume root
+    requested = os.path.normpath(os.path.join(VOLUME_PATH, filename))
+    if not requested.startswith(VOLUME_PATH):
+        return json.dumps({"error": "Path traversal denied"})
 
-    if not os.path.isfile(path):
-        return json.dumps({"error": "File not found: %s" % safe_name})
+    if os.path.isdir(requested):
+        entries = []
+        for f in sorted(os.listdir(requested)):
+            full = os.path.join(requested, f)
+            if os.path.isfile(full):
+                entries.append({"name": f, "size_bytes": os.path.getsize(full)})
+            elif os.path.isdir(full):
+                entries.append({"name": f + "/", "type": "directory"})
+        return json.dumps({"path": filename, "files": entries}, indent=2)
+
+    if not os.path.isfile(requested):
+        return json.dumps({"error": "File not found: %s" % filename})
 
     try:
         with open(path, "r", encoding="utf-8") as f:

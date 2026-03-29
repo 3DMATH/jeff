@@ -1,34 +1,47 @@
 #!/usr/bin/env bash
 # ============================================================
-#  JEFF -- Booster Chip TUI
+#  JEFF -- Always knows a guy.
 # ============================================================
-#  Usage: ./jeff <command> [args]
+#  Usage: jeff <command> [args]
 #
-#  Commands:
-#    scan                    Detect chips on mounted volumes
-#    activate <path>         Start MCP + heartbeat (no vault)
-#    deactivate              Stop MCP + heartbeat
-#    mount [--read-write]    Decrypt vault, full MCP access
-#    unmount                 Seal vault
-#    init <path> [--label X] Initialize a chip on a volume
-#    flash <disk> [--label X] Erase + init
-#    flip                    Toggle read-only / read-write
-#    status                  Show active chip info
-#    resolve <hex>           Resolve hex to spectral band
-#    midpoint <a> <b>        Find midpoint between two hex colors
-#    constellation <hex...>  Group hex colors by band proximity
-#    version                 Show Jeff version
+#  Chip Management:
+#    scan                     Detect chips on mounted volumes
+#    flash <disk> [--label X] Erase disk + burn a fresh chip
+#    init <path> [--label X]  Burn chip on formatted volume
+#    activate <path>          Start MCP (no vault, no passphrase)
+#    deactivate               Stop MCP + remove CueSheet
+#    mount [--read-write]     Decrypt vault for full access
+#    unmount                  Seal vault, stop MCP, clean up
+#    flip                     Toggle read-only / read-write
+#    status                   Show active chip info
+#
+#  Spectral Binding:
+#    resolve <hex>            Resolve hex to spectral band
+#    midpoint <a> <b>         Find midpoint between two colors
+#    constellation <hex...>   Group colors by band proximity
+#
+#  Info:
+#    version                  Show Jeff version
+#    help                     Show this message
 # ============================================================
 
 set -euo pipefail
 
-JEFF_VERSION="0.1.0"
+JEFF_VERSION="0.2.0"
 JEFF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHIP_DIR="${JEFF_DIR}/chip"
 SPECTRAL_DIR="${JEFF_DIR}/spectral"
 STATE_FILE="${JEFF_DIR}/.jeff-state.json"
 MCP_PID_FILE="${JEFF_DIR}/.jeff-mcp.pid"
-HEARTBEAT_PID_FILE="${JEFF_DIR}/.jeff-heartbeat.pid"
+
+# Maestro integration (optional -- jeff works standalone too)
+MAESTRO_ROOT=""
+MAESTRO_CUE_SHEETS=""
+_maybe_maestro="$(cd "${JEFF_DIR}/../.." 2>/dev/null && pwd)"
+if [[ -d "${_maybe_maestro}/cue-sheets" ]]; then
+    MAESTRO_ROOT="${_maybe_maestro}"
+    MAESTRO_CUE_SHEETS="${_maybe_maestro}/cue-sheets"
+fi
 
 LOGO='
        ██╗███████╗███████╗███████╗
@@ -58,11 +71,187 @@ warn()  { echo -e "  ${C_YELLOW}>>>${C_RESET} $1"; }
 fail()  { echo -e "  ${C_RED}>>>${C_RESET} $1"; }
 
 # ============================================================
+# HELPERS
+# ============================================================
+
+_verify_identity() {
+    local heartbeat="$1"
+    python3 - "${heartbeat}" << 'PYEOF'
+import json, sys, hashlib
+with open(sys.argv[1]) as f:
+    chip = json.load(f)
+if chip.get("format") != "booster-chip":
+    print("FAIL|Not a booster chip")
+    sys.exit(0)
+if chip.get("protocol", 0) > 1:
+    print("FAIL|Protocol version %s not supported" % chip.get("protocol"))
+    sys.exit(0)
+stored = chip.get("identity_hash", "")
+if stored:
+    copy = dict(chip)
+    copy["identity_hash"] = ""
+    computed = hashlib.sha256(json.dumps(copy, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    if computed != stored:
+        print("FAIL|Identity tampered")
+        sys.exit(0)
+root = chip.get("tool_chain", {}).get("root", "#000000")
+print("OK|%s|%s|%s|%s|%s" % (
+    chip.get("device_id",""),
+    chip.get("label",""),
+    chip.get("model",""),
+    root,
+    chip.get("vault_volume_name",""),
+))
+PYEOF
+}
+
+_resolve_band() {
+    python3 -c "import sys; sys.path.insert(0,'${SPECTRAL_DIR}'); from spectral import resolve; print(resolve('$1').get('band','?'))" 2>/dev/null || echo "?"
+}
+
+_inject_cuesheet() {
+    local label="$1" root_color="$2" band="$3"
+    if [[ -z "${MAESTRO_CUE_SHEETS}" ]]; then
+        return
+    fi
+
+    local label_slug
+    label_slug=$(echo "${label}" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+    local cuesheet_path="${MAESTRO_CUE_SHEETS}/_jeff-${label_slug}.yaml"
+
+    python3 - "${cuesheet_path}" "${label}" "${root_color}" "${band}" << 'PYEOF'
+import sys
+
+path, label, root_color, band = sys.argv[1:5]
+
+yaml_content = """name: "%s"
+description: "Jeff chip -- root %s (%s band)"
+icon: "\U0001F4BE"
+order: 0
+
+cues:
+  - id: spectral_ama
+    objective: >
+      You are running on a Jeff Booster Chip. Your primary knowledge
+      is Spectral Binding -- a measurement axiom that maps any namespace
+      to a continuous colorspace address using 7-21 perceivable bands
+      per zoom level, labeled with periodic table elements (H through Sc).
+
+      Start by greeting the user and giving a clear, concise definition
+      of Spectral Binding. Then use the chip tools to demonstrate
+      interactively: resolve colors to bands, show the registry, find
+      midpoints between addresses, split bands, measure distances.
+
+      If the user asks deeper questions about the theory, read the
+      paper from the card: chip_read_card .jeff/docs/spectral-binding.md
+
+      Key concepts to be ready to explain:
+        - 16.7 million addresses at 24-bit (hex colors)
+        - 7-21 bands per zoom level (Miller's number)
+        - Periodic table element labels at every level
+        - Addresses are discovered via midpoint, not assigned
+        - Tool chain hashes tools to a root color (chip identity)
+        - Connection to RoPE (rotary position embeddings)
+    context:
+      why: >
+        Every Jeff chip carries Spectral Binding as native knowledge.
+        This is the default experience -- plug in a chip, ask about
+        spectral binding, and it just knows.
+      constraints:
+        - Lead with a clear definition, then demonstrate with tools
+        - Resolve real hex values when giving examples
+        - Show the band registry when explaining structure
+        - Use midpoints to show how addresses are discovered
+        - The paper at .jeff/docs/spectral-binding.md is an easter egg
+        - Keep answers grounded in tool output, not just theory
+      resources:
+        - chip_status
+        - chip_resolve_hex
+        - chip_resolve_deep
+        - chip_midpoint
+        - chip_split_band
+        - chip_distance
+        - chip_registry
+        - chip_constellation
+        - chip_tool_chain
+        - chip_read_card
+      style:
+        tone: conversational
+
+  - id: chip_hello
+    objective: >
+      Report chip status. Show the tool chain root color and
+      resolve it to its spectral band. List what tools are available.
+    context:
+      why: Orient the user to what this chip can do.
+      resources:
+        - chip_status
+        - chip_tool_chain
+        - chip_resolve_hex
+      style:
+        tone: concise
+
+success_criteria: User asks about spectral binding and gets a clear answer backed by live tool demos.
+""" % (label, root_color, band)
+
+with open(path, "w") as f:
+    f.write(yaml_content)
+PYEOF
+
+    echo "${cuesheet_path}"
+}
+
+_remove_cuesheet() {
+    local cuesheet="$1"
+    if [[ -n "${cuesheet}" ]] && [[ -f "${cuesheet}" ]]; then
+        rm -f "${cuesheet}"
+        ok "Cue-sheet removed"
+    fi
+}
+
+_kill_pid() {
+    local pid="$1"
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+        kill "${pid}" 2>/dev/null || true
+        local i
+        for i in 1 2 3 4 5; do
+            kill -0 "${pid}" 2>/dev/null || return 0
+            sleep 1
+        done
+        kill -9 "${pid}" 2>/dev/null || true
+    fi
+}
+
+_start_mcp() {
+    local volume="$1" device_id="$2" label="$3" model="$4" mode="$5"
+    local vault_mount="${6:-}"
+
+    export CHIP_DEVICE_ID="${device_id}"
+    export CHIP_LABEL="${label}"
+    export CHIP_VOLUME="${volume}"
+    export CHIP_VAULT_MOUNT="${vault_mount}"
+    export CHIP_MODEL="${model}"
+    export CHIP_MODE="${mode}"
+
+    # Always run MCP from the card
+    local mcp_server="${volume}/mcp/server.py"
+    if [[ ! -f "${mcp_server}" ]]; then
+        mcp_server="${CHIP_DIR}/mcp_server.py"
+        warn "No MCP on card -- using host copy"
+    fi
+
+    python3 "${mcp_server}" &
+    local mcp_pid=$!
+    echo "${mcp_pid}" > "${MCP_PID_FILE}"
+    echo "${mcp_pid}"
+}
+
+# ============================================================
 # SCAN
 # ============================================================
 
 cmd_scan() {
-    echo -e "${C_BOLD}  Scanning for Booster Chips${C_RESET}"
+    echo -e "${C_BOLD}  Scanning for chips${C_RESET}"
     echo ""
 
     python3 - "${SPECTRAL_DIR}" << 'PYEOF'
@@ -125,7 +314,92 @@ PYEOF
 }
 
 # ============================================================
-# ACTIVATE
+# FLASH
+# ============================================================
+
+cmd_flash() {
+    local disk="${1:?Usage: jeff flash /dev/diskN [--label NAME] [--size 8g]}"
+    shift
+
+    local label="" vault_size="8g" model_name="qwen2.5:7b-instruct-q4_K_M"
+    local confirmed=0
+
+    # Try to detect existing volume name
+    local existing
+    existing=$(diskutil info "${disk}" 2>/dev/null | grep "Volume Name" | sed 's/.*: *//' | tr -d ' ' || echo "")
+    if [[ -z "${existing}" ]] || [[ "${existing}" == "Notapplicable" ]]; then
+        existing=$(diskutil list "${disk}" 2>/dev/null | grep -oE '[A-Z][A-Z0-9_-]+' | head -1 || echo "")
+    fi
+
+    label="${existing:-Chip}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --label)  label="$2"; shift 2 ;;
+            --size)   vault_size="$2"; shift 2 ;;
+            --model)  model_name="$2"; shift 2 ;;
+            --yes)    confirmed=1; shift ;;
+            *)        echo "Unknown arg: $1"; exit 1 ;;
+        esac
+    done
+
+    # Validation
+    if [[ ! -e "${disk}" ]]; then
+        fail "${disk} does not exist"
+        exit 1
+    fi
+
+    local boot_disk
+    boot_disk=$(diskutil info / 2>/dev/null | grep "Part of Whole" | awk '{print $NF}')
+    if [[ "${disk}" == *"${boot_disk}"* ]]; then
+        fail "Refusing to format the boot disk"
+        exit 1
+    fi
+
+    echo ""
+    echo -e "  ${C_BOLD}Jeff Flash${C_RESET}"
+    echo ""
+    diskutil info "${disk}" 2>/dev/null | grep -E "Device Node|Device / Media Name|Disk Size|Volume Name" | sed 's/^/  /'
+    echo ""
+    echo "  Label:   ${label}"
+    echo "  Vault:   ${vault_size}"
+    echo ""
+
+    if [[ "${confirmed}" -eq 0 ]]; then
+        echo -e "  ${C_RED}!! This will ERASE ALL DATA on ${disk} !!${C_RESET}"
+        echo ""
+        read -rp "  Type YES to continue: " CONFIRM
+        echo ""
+        if [[ "${CONFIRM}" != "YES" ]]; then
+            echo "  Aborted."
+            exit 1
+        fi
+    fi
+
+    # Erase
+    echo "  [1/2] Erasing ${disk}..."
+    diskutil eraseDisk ExFAT "${label}" GPT "${disk}"
+
+    local mount_point="/Volumes/${label}"
+    if [[ ! -d "${mount_point}" ]]; then
+        fail "Disk did not mount at ${mount_point}"
+        exit 1
+    fi
+
+    ok "Formatted: ${mount_point}"
+    echo ""
+
+    # Init
+    echo "  [2/2] Initializing chip..."
+    echo ""
+    "${CHIP_DIR}/init.sh" "${mount_point}" \
+        --label "${label}" \
+        --size "${vault_size}" \
+        --model "${model_name}"
+}
+
+# ============================================================
+# ACTIVATE (no vault, no passphrase)
 # ============================================================
 
 cmd_activate() {
@@ -140,47 +414,29 @@ cmd_activate() {
         local current
         current=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('label',''))" 2>/dev/null || echo "")
         if [[ -n "${current}" ]]; then
-            fail "Already active: ${current}. Deactivate first."
+            fail "Already active: ${current}. Run 'jeff deactivate' first."
             exit 1
         fi
     fi
 
     # Verify identity
     local chip_info
-    chip_info=$(python3 - "${volume}/heartbeat.json" << 'PYEOF'
-import json, sys, hashlib
-with open(sys.argv[1]) as f:
-    chip = json.load(f)
-if chip.get("format") != "booster-chip":
-    print("FAIL|Not a booster chip")
-    sys.exit(0)
-stored = chip.get("identity_hash", "")
-if stored:
-    copy = dict(chip)
-    copy["identity_hash"] = ""
-    computed = hashlib.sha256(json.dumps(copy, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-    if computed != stored:
-        print("FAIL|Identity tampered")
-        sys.exit(0)
-root = chip.get("tool_chain", {}).get("root", "#000000")
-print("OK|%s|%s|%s|%s" % (chip.get("device_id",""), chip.get("label",""), chip.get("model",""), root))
-PYEOF
-    )
+    chip_info=$(_verify_identity "${volume}/heartbeat.json")
 
     if [[ "${chip_info}" == FAIL* ]]; then
         fail "${chip_info#FAIL|}"
         exit 1
     fi
 
-    local device_id label model root_color
+    local device_id label model root_color vault_vol
     device_id=$(echo "${chip_info}" | cut -d'|' -f2)
     label=$(echo "${chip_info}" | cut -d'|' -f3)
     model=$(echo "${chip_info}" | cut -d'|' -f4)
     root_color=$(echo "${chip_info}" | cut -d'|' -f5)
+    vault_vol=$(echo "${chip_info}" | cut -d'|' -f6)
 
-    # Resolve band
     local band
-    band=$(python3 -c "import sys; sys.path.insert(0,'${SPECTRAL_DIR}'); from spectral import resolve; print(resolve('${root_color}').get('band','?'))" 2>/dev/null || echo "?")
+    band=$(_resolve_band "${root_color}")
 
     echo ""
     echo -e "  ${C_BOLD}Activating${C_RESET}"
@@ -189,34 +445,20 @@ PYEOF
     echo -e "  Root:     ${C_CYAN}${root_color}${C_RESET} (${band})"
     echo ""
 
-    # Start MCP server FROM THE CARD
-    export CHIP_DEVICE_ID="${device_id}"
-    export CHIP_LABEL="${label}"
-    export CHIP_VOLUME="${volume}"
-    export CHIP_VAULT_MOUNT=""
-    export CHIP_MODEL="${model}"
-    export CHIP_MODE="activated"
-    export CHIP_FIRMWARE=""
-    export CHIP_CUESHEETS=""
-    export CHIP_USER_CUESHEETS=""
-    export CHIP_STATE=""
-    export CHIP_CREDENTIALS=""
-    export CHIP_LOGS=""
-
-    # Run from card if available, fall back to host copy
-    local mcp_server="${volume}/mcp/server.py"
-    if [[ ! -f "${mcp_server}" ]]; then
-        mcp_server="${CHIP_DIR}/mcp_server.py"
-        warn "No MCP on card -- using host copy"
-    fi
-
-    python3 "${mcp_server}" &
-    local mcp_pid=$!
-    echo "${mcp_pid}" > "${MCP_PID_FILE}"
+    # Start MCP
+    local mcp_pid
+    mcp_pid=$(_start_mcp "${volume}" "${device_id}" "${label}" "${model}" "activated")
     ok "MCP server (PID ${mcp_pid})"
 
+    # Inject cue-sheet
+    local cuesheet_path=""
+    cuesheet_path=$(_inject_cuesheet "${label}" "${root_color}" "${band}")
+    if [[ -n "${cuesheet_path}" ]]; then
+        ok "CueSheet injected"
+    fi
+
     # Write state
-    python3 - "${STATE_FILE}" "${device_id}" "${label}" "${volume}" "${mcp_pid}" "${model}" "${root_color}" "${band}" << 'PYEOF'
+    python3 - "${STATE_FILE}" "${device_id}" "${label}" "${volume}" "${mcp_pid}" "${model}" "${root_color}" "${band}" "${cuesheet_path}" "${vault_vol}" << 'PYEOF'
 import json, sys
 from datetime import datetime, timezone
 path = sys.argv[1]
@@ -224,6 +466,7 @@ state = {
     "device_id": sys.argv[2], "label": sys.argv[3], "volume_path": sys.argv[4],
     "vault_mount": "", "mcp_pid": int(sys.argv[5]), "model": sys.argv[6],
     "mode": "activated", "root_color": sys.argv[7], "band": sys.argv[8],
+    "cuesheet_injection": sys.argv[9], "vault_volume_name": sys.argv[10],
     "activated_at": datetime.now(timezone.utc).isoformat()
 }
 with open(path, "w") as f:
@@ -245,19 +488,255 @@ cmd_deactivate() {
         exit 0
     fi
 
-    local label
+    local label mcp_pid cuesheet mode vault_mount
     label=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('label','?'))" 2>/dev/null || echo "?")
-    local mcp_pid
     mcp_pid=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('mcp_pid',''))" 2>/dev/null || echo "")
+    cuesheet=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('cuesheet_injection',''))" 2>/dev/null || echo "")
+    mode=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('mode',''))" 2>/dev/null || echo "")
+    vault_mount=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('vault_mount',''))" 2>/dev/null || echo "")
 
-    if [[ -n "${mcp_pid}" ]] && kill -0 "${mcp_pid}" 2>/dev/null; then
-        kill "${mcp_pid}" 2>/dev/null || true
-        sleep 1
-        kill -0 "${mcp_pid}" 2>/dev/null && kill -9 "${mcp_pid}" 2>/dev/null || true
+    echo ""
+    echo -e "  ${C_BOLD}Deactivating: ${label}${C_RESET}"
+    echo ""
+
+    # If vault is mounted, unmount it first
+    if [[ -n "${vault_mount}" ]] && [[ -d "${vault_mount}" ]]; then
+        info "Detaching vault..."
+        sync
+        hdiutil detach "${vault_mount}" -quiet 2>/dev/null || {
+            warn "Clean detach failed -- forcing..."
+            hdiutil detach "${vault_mount}" -force 2>/dev/null || true
+        }
+        ok "Vault sealed"
     fi
+
+    # Stop MCP
+    _kill_pid "${mcp_pid}"
+    ok "MCP stopped"
+
+    # Remove cue-sheet
+    _remove_cuesheet "${cuesheet}"
+
     rm -f "${MCP_PID_FILE}" "${STATE_FILE}"
 
     ok "Deactivated: ${label}"
+    echo ""
+}
+
+# ============================================================
+# MOUNT (decrypt vault, full access)
+# ============================================================
+
+cmd_mount() {
+    local mount_mode="read-only"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --read-write) mount_mode="read-write"; shift ;;
+            *)            echo "Unknown arg: $1"; exit 1 ;;
+        esac
+    done
+
+    if [[ ! -f "${STATE_FILE}" ]]; then
+        fail "No chip active. Run 'jeff activate /Volumes/NAME' first."
+        exit 1
+    fi
+
+    local volume_path vault_volume_name device_id label model current_mode
+    volume_path=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('volume_path',''))" 2>/dev/null)
+    vault_volume_name=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('vault_volume_name',''))" 2>/dev/null)
+    device_id=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('device_id',''))" 2>/dev/null)
+    label=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('label',''))" 2>/dev/null)
+    model=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('model',''))" 2>/dev/null)
+    current_mode=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('mode',''))" 2>/dev/null)
+
+    if [[ "${current_mode}" == "read-only" ]] || [[ "${current_mode}" == "read-write" ]]; then
+        fail "Vault already mounted in ${current_mode} mode. Use 'jeff flip' or 'jeff unmount'."
+        exit 1
+    fi
+
+    if [[ ! -f "${volume_path}/vault.sparseimage" ]]; then
+        fail "No vault.sparseimage at ${volume_path}"
+        exit 1
+    fi
+
+    echo ""
+    echo -e "  ${C_BOLD}Mounting vault: ${label}${C_RESET}"
+    echo -e "  Mode: ${mount_mode}"
+    echo ""
+
+    # Decrypt vault
+    read -rsp "  Passphrase: " VAULT_PASS
+    echo ""
+
+    echo "${VAULT_PASS}" | hdiutil attach "${volume_path}/vault.sparseimage" -stdinpass -quiet 2>/dev/null || {
+        echo ""
+        warn "Retrying..."
+        read -rsp "  Passphrase: " VAULT_PASS
+        echo ""
+        echo "${VAULT_PASS}" | hdiutil attach "${volume_path}/vault.sparseimage" -stdinpass || {
+            fail "Could not mount vault"
+            exit 1
+        }
+    }
+
+    local vault_mount="/Volumes/${vault_volume_name}"
+    if [[ ! -d "${vault_mount}" ]]; then
+        fail "Vault did not mount at ${vault_mount}"
+        exit 1
+    fi
+
+    ok "Vault mounted at ${vault_mount}"
+
+    # Increment mount count
+    python3 - "${volume_path}/heartbeat.json" << 'PYEOF'
+import json, sys, hashlib
+path = sys.argv[1]
+with open(path) as f:
+    chip = json.load(f)
+chip["mount_count"] = chip.get("mount_count", 0) + 1
+chip["identity_hash"] = ""
+canonical = json.dumps(chip, sort_keys=True, ensure_ascii=False)
+chip["identity_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+with open(path, "w") as f:
+    json.dump(chip, f, indent=2)
+print("  Mount #%d" % chip["mount_count"])
+PYEOF
+
+    # Restart MCP with vault access
+    local old_pid
+    old_pid=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('mcp_pid',''))" 2>/dev/null || echo "")
+    _kill_pid "${old_pid}"
+
+    local mcp_pid
+    mcp_pid=$(_start_mcp "${volume_path}" "${device_id}" "${label}" "${model}" "${mount_mode}" "${vault_mount}")
+    ok "MCP restarted with vault (PID ${mcp_pid})"
+
+    # Update state
+    python3 - "${STATE_FILE}" "${vault_mount}" "${mount_mode}" "${mcp_pid}" << 'PYEOF'
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    state = json.load(f)
+state["vault_mount"] = sys.argv[2]
+state["mode"] = sys.argv[3]
+state["mcp_pid"] = int(sys.argv[4])
+with open(path, "w") as f:
+    json.dump(state, f, indent=2)
+PYEOF
+
+    echo ""
+    echo -e "  ${C_GREEN}Mounted: ${label} [${mount_mode}]${C_RESET}"
+    echo ""
+}
+
+# ============================================================
+# UNMOUNT (seal vault, keep chip active)
+# ============================================================
+
+cmd_unmount() {
+    if [[ ! -f "${STATE_FILE}" ]]; then
+        warn "No chip active."
+        exit 0
+    fi
+
+    local vault_mount label mcp_pid
+    vault_mount=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('vault_mount',''))" 2>/dev/null || echo "")
+    label=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('label',''))" 2>/dev/null || echo "?")
+    mcp_pid=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('mcp_pid',''))" 2>/dev/null || echo "")
+
+    if [[ -z "${vault_mount}" ]] || [[ ! -d "${vault_mount}" ]]; then
+        warn "No vault mounted."
+        exit 0
+    fi
+
+    echo ""
+    echo -e "  ${C_BOLD}Unmounting vault: ${label}${C_RESET}"
+    echo ""
+
+    # Restart MCP without vault
+    _kill_pid "${mcp_pid}"
+
+    local volume_path device_id model
+    volume_path=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('volume_path',''))" 2>/dev/null)
+    device_id=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('device_id',''))" 2>/dev/null)
+    model=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('model',''))" 2>/dev/null)
+
+    # Detach vault
+    sync
+    hdiutil detach "${vault_mount}" -quiet 2>/dev/null || {
+        warn "Clean detach failed -- forcing..."
+        hdiutil detach "${vault_mount}" -force 2>/dev/null || true
+    }
+    ok "Vault sealed"
+
+    # Restart MCP in activated mode (no vault)
+    local new_pid
+    new_pid=$(_start_mcp "${volume_path}" "${device_id}" "${label}" "${model}" "activated")
+    ok "MCP restarted without vault (PID ${new_pid})"
+
+    # Update state
+    python3 - "${STATE_FILE}" "${new_pid}" << 'PYEOF'
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    state = json.load(f)
+state["vault_mount"] = ""
+state["mode"] = "activated"
+state["mcp_pid"] = int(sys.argv[2])
+with open(path, "w") as f:
+    json.dump(state, f, indent=2)
+PYEOF
+
+    echo ""
+    echo -e "  ${C_GREEN}Vault sealed. ${label} still active.${C_RESET}"
+    echo ""
+}
+
+# ============================================================
+# FLIP (toggle read-only / read-write)
+# ============================================================
+
+cmd_flip() {
+    if [[ ! -f "${STATE_FILE}" ]]; then
+        fail "No chip active."
+        exit 1
+    fi
+
+    local current_mode label
+    current_mode=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('mode',''))" 2>/dev/null)
+    label=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('label',''))" 2>/dev/null)
+
+    if [[ "${current_mode}" == "activated" ]]; then
+        fail "Vault not mounted. Run 'jeff mount' first."
+        exit 1
+    fi
+
+    local new_mode
+    if [[ "${current_mode}" == "read-only" ]]; then
+        new_mode="read-write"
+        echo ""
+        echo "  Switching to READ-WRITE."
+        read -rp "  Confirm? (yes/no): " CONFIRM
+        if [[ "${CONFIRM}" != "yes" ]]; then
+            echo "  Cancelled."
+            return
+        fi
+    else
+        new_mode="read-only"
+    fi
+
+    python3 - "${STATE_FILE}" "${new_mode}" << 'PYEOF'
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    state = json.load(f)
+state["mode"] = sys.argv[2]
+with open(path, "w") as f:
+    json.dump(state, f, indent=2)
+PYEOF
+
+    export CHIP_MODE="${new_mode}"
+    ok "${label}: ${new_mode}"
 }
 
 # ============================================================
@@ -349,28 +828,53 @@ cmd_init() {
 
 cmd_help() {
     echo -e "${C_DIM}${LOGO}${C_RESET}"
-    echo -e "  ${C_BOLD}Portable encrypted firmware cartridges for AI agents.${C_RESET}"
+    echo -e "  ${C_BOLD}Always knows a guy.${C_RESET}"
     echo -e "  ${C_DIM}v${JEFF_VERSION} | 3DMATH${C_RESET}"
+    echo ""
+    echo "  Jeff manages Booster Chips -- encrypted SD cards that give"
+    echo "  your AI access to tools, data, and models. Plug in a chip,"
+    echo "  Jeff scans it, confirms it is golden, and opens the MCP line."
+    echo "  Pull it out, nothing breaks. Plug it back in, Jeff picks up"
+    echo "  right where you left off."
+    echo ""
+    echo "  When a chip activates, a CueSheet appears in the cue-vox"
+    echo "  menu named after the volume. Remove the chip, it disappears."
     echo ""
     echo "  Usage: jeff <command> [args]"
     echo ""
     echo "  Chip Management:"
     echo "    scan                     Detect chips on mounted volumes"
-    echo "    activate <path>          Start MCP + heartbeat (no vault)"
-    echo "    deactivate               Stop everything"
+    echo "    flash <disk> [--label X] Erase disk + burn a fresh chip"
+    echo "    init <path> [--label X]  Burn chip on formatted volume"
+    echo "    activate <path>          Start MCP (no vault, no passphrase)"
+    echo "    deactivate               Stop everything + clean up"
     echo "    mount [--read-write]     Decrypt vault for full access"
-    echo "    unmount                  Seal vault"
-    echo "    status                   Show active chip info"
-    echo "    init <path> [--label X]  Initialize a chip"
-    echo "    flash <disk> [--label X] Erase disk + init"
+    echo "    unmount                  Seal vault (chip stays active)"
     echo "    flip                     Toggle read-only / read-write"
+    echo "    status                   Show active chip info"
     echo ""
     echo "  Spectral Binding:"
     echo "    resolve <hex>            Resolve hex to spectral band"
     echo "    midpoint <hex> <hex>     Find midpoint between two colors"
     echo "    constellation <hex...>   Group colors by band proximity"
     echo ""
+    echo "  Info:"
     echo "    version                  Show Jeff version"
+    echo "    help                     Show this message"
+    echo ""
+    echo "  Quick Start:"
+    echo "    1. Insert an SD card"
+    echo "    2. jeff scan                    Find the chip"
+    echo "    3. jeff activate /Volumes/NAME  Light it up"
+    echo "    4. Open cue-vox -- the chip CueSheet is in the menu"
+    echo ""
+    echo "  Full Flow:"
+    echo "    jeff flash /dev/disk4 --label YELLOW"
+    echo "    jeff activate /Volumes/YELLOW"
+    echo "    jeff mount --read-write"
+    echo "    jeff flip"
+    echo "    jeff unmount"
+    echo "    jeff deactivate"
     echo ""
 }
 
@@ -391,8 +895,12 @@ shift 2>/dev/null || true
 
 case "${COMMAND}" in
     scan)           cmd_scan ;;
+    flash)          cmd_flash "$@" ;;
     activate)       cmd_activate "$@" ;;
     deactivate)     cmd_deactivate ;;
+    mount)          cmd_mount "$@" ;;
+    unmount)        cmd_unmount ;;
+    flip)           cmd_flip ;;
     status)         cmd_status ;;
     init)           cmd_init "$@" ;;
     resolve)        cmd_resolve "$@" ;;
