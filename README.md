@@ -9,6 +9,8 @@
 
 Jeff is a chip you plug into your computer so your AI can learn Spectral Binding.
 
+Put an SD card in. Run five commands. Your AI is reading a paper about spatial cognition off the chip and running the math live. That's it.
+
 ## What you need
 
 - An SD card (any size)
@@ -77,17 +79,31 @@ Or just activate the chip and point your MCP client at `chip/mcp_server.py`.
 
 Now ask Claude:
 
-> "Use chip_registry to show me the spectral bands."
+> "What's on the chip?"
 
-> "Use chip_resolve_hex to tell me what band #F882C9 is in."
+Claude calls `chip_read_card` and lists the files on the card. One of them is `spectral-binding.md`.
 
-> "Use chip_midpoint to find the color between #FF0000 and #00FF00."
+> "Read spectral-binding.md from the chip."
 
-> "Use chip_resolve_deep to zoom 5 levels into #3A7F2B."
+Claude reads the full Spectral Binding paper directly off the SD card. It now understands the theory.
 
-> "Use chip_tool_chain to show me this chip's Merkle tree and root color."
+> "Show me the spectral bands."
 
-Claude can now see the entire spectral namespace, resolve any hex address, discover midpoints, and inspect the chip's identity -- all through the MCP tools on the card.
+Claude calls `chip_registry`. Six bands. The hue wheel.
+
+> "What band is #F882C9 in?"
+
+Claude calls `chip_resolve_hex`. Experiment band. Hue 323.9.
+
+> "Find the color between #FF0000 and #00FF00."
+
+Claude calls `chip_midpoint`. Discovers an address that was always there.
+
+> "Zoom 5 levels into #3A7F2B."
+
+Claude calls `chip_resolve_deep`. Same 7-21 bands at every level. Infinite depth. Constant cognitive load.
+
+The paper is the theory. The tools are the proof. Both on the same card.
 
 ## Step 5: Deactivate
 
@@ -121,6 +137,7 @@ These are the tools Claude gets when a chip is activated:
 
 | Tool | What it does |
 |------|-------------|
+| `chip_read_card` | List or read files on the card (no vault needed) |
 | `chip_status` | Chip identity, mode, root color, band |
 | `chip_resolve_hex` | Resolve any hex to its spectral band and position |
 | `chip_resolve_deep` | Zoom multiple levels into a hex address |

@@ -58,6 +58,50 @@ def chip_status():
 
 
 # ============================================================
+# CARD SURFACE (unencrypted files, always readable)
+# ============================================================
+
+@mcp.tool()
+def chip_read_card(filename: str = ""):
+    """Read a file from the card surface (no vault needed).
+
+    Files on the card root are unencrypted and always readable
+    when the card is plugged in. This is how the chip shares
+    public content like papers, specs, and documentation.
+
+    Args:
+        filename: File to read. Empty to list all files on the card.
+    """
+    if not VOLUME_PATH or not os.path.isdir(VOLUME_PATH):
+        return json.dumps({"error": "No card volume available"})
+
+    if not filename:
+        files = []
+        for f in sorted(os.listdir(VOLUME_PATH)):
+            if f.startswith("."):
+                continue
+            full = os.path.join(VOLUME_PATH, f)
+            if os.path.isfile(full):
+                files.append({"name": f, "size_bytes": os.path.getsize(full)})
+            elif os.path.isdir(full):
+                files.append({"name": f + "/", "type": "directory"})
+        return json.dumps({"volume": VOLUME_PATH, "files": files}, indent=2)
+
+    safe_name = os.path.basename(filename)
+    path = os.path.join(VOLUME_PATH, safe_name)
+
+    if not os.path.isfile(path):
+        return json.dumps({"error": "File not found: %s" % safe_name})
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return json.dumps({"file": safe_name, "content": content}, indent=2)
+    except UnicodeDecodeError:
+        return json.dumps({"file": safe_name, "error": "Binary file", "size_bytes": os.path.getsize(path)})
+
+
+# ============================================================
 # SPECTRAL BINDING
 # ============================================================
 
