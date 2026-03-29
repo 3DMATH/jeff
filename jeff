@@ -1,0 +1,417 @@
+#!/usr/bin/env bash
+# ============================================================
+#  JEFF -- Booster Chip TUI
+# ============================================================
+#  Usage: ./jeff <command> [args]
+#
+#  Commands:
+#    scan                    Detect chips on mounted volumes
+#    activate <path>         Start MCP + heartbeat (no vault)
+#    deactivate              Stop MCP + heartbeat
+#    mount [--read-write]    Decrypt vault, full MCP access
+#    unmount                 Seal vault
+#    init <path> [--label X] Initialize a chip on a volume
+#    flash <disk> [--label X] Erase + init
+#    flip                    Toggle read-only / read-write
+#    status                  Show active chip info
+#    resolve <hex>           Resolve hex to spectral band
+#    midpoint <a> <b>        Find midpoint between two hex colors
+#    constellation <hex...>  Group hex colors by band proximity
+#    version                 Show Jeff version
+# ============================================================
+
+set -euo pipefail
+
+JEFF_VERSION="0.1.0"
+JEFF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CHIP_DIR="${JEFF_DIR}/chip"
+SPECTRAL_DIR="${JEFF_DIR}/spectral"
+STATE_FILE="${JEFF_DIR}/.jeff-state.json"
+MCP_PID_FILE="${JEFF_DIR}/.jeff-mcp.pid"
+HEARTBEAT_PID_FILE="${JEFF_DIR}/.jeff-heartbeat.pid"
+
+LOGO='
+       ██╗███████╗███████╗███████╗
+       ██║██╔════╝██╔════╝██╔════╝
+       ██║█████╗  █████╗  █████╗
+  ██   ██║██╔══╝  ██╔══╝  ██╔══╝
+  ╚█████╔╝███████╗██║     ██║
+   ╚════╝ ╚══════╝╚═╝     ╚═╝
+'
+
+# ============================================================
+# COLORS
+# ============================================================
+
+C_RESET="\033[0m"
+C_BOLD="\033[1m"
+C_DIM="\033[2m"
+C_GREEN="\033[32m"
+C_YELLOW="\033[33m"
+C_BLUE="\033[34m"
+C_RED="\033[31m"
+C_CYAN="\033[36m"
+
+info()  { echo -e "  ${C_BLUE}>>>${C_RESET} $1"; }
+ok()    { echo -e "  ${C_GREEN}>>>${C_RESET} $1"; }
+warn()  { echo -e "  ${C_YELLOW}>>>${C_RESET} $1"; }
+fail()  { echo -e "  ${C_RED}>>>${C_RESET} $1"; }
+
+# ============================================================
+# SCAN
+# ============================================================
+
+cmd_scan() {
+    echo -e "${C_BOLD}  Scanning for Booster Chips${C_RESET}"
+    echo ""
+
+    python3 - "${SPECTRAL_DIR}" << 'PYEOF'
+import os, json, sys
+
+spectral_dir = sys.argv[1]
+sys.path.insert(0, spectral_dir)
+
+try:
+    from spectral import resolve
+    HAS_SPECTRAL = True
+except ImportError:
+    HAS_SPECTRAL = False
+
+volumes_dir = "/Volumes"
+found = []
+
+if os.path.isdir(volumes_dir):
+    for name in sorted(os.listdir(volumes_dir)):
+        vol = os.path.join(volumes_dir, name)
+        hb = os.path.join(vol, "heartbeat.json")
+        if not os.path.isfile(hb):
+            continue
+        try:
+            with open(hb) as f:
+                chip = json.load(f)
+            root = chip.get("tool_chain", {}).get("root", "")
+            band = ""
+            if root and HAS_SPECTRAL:
+                band = resolve(root).get("band", "")
+            found.append({
+                "label": chip.get("label", name),
+                "device": chip.get("device_id", "?")[:8],
+                "root": root or "-",
+                "band": band or "-",
+                "mounts": chip.get("mount_count", 0),
+                "path": vol,
+            })
+        except Exception:
+            continue
+
+if not found:
+    print("  No chips detected. Insert an SD card with heartbeat.json.")
+    exit(0)
+
+print("  %-10s %-8s %-9s %-12s %4s  %s" % ("Label", "Device", "Root", "Band", "Mnts", "Path"))
+print("  " + "-" * 65)
+for c in found:
+    print("  %-10s %-8s %-9s %-12s %4d  %s" % (
+        c["label"][:10], c["device"], c["root"][:9], c["band"][:12], c["mounts"], c["path"]
+    ))
+
+if len(found) > 1 and HAS_SPECTRAL:
+    from spectral import constellation_summary
+    roots = [c["root"] for c in found if c["root"] != "-"]
+    if roots:
+        print("")
+        print("  Constellation: %s" % constellation_summary(roots))
+PYEOF
+}
+
+# ============================================================
+# ACTIVATE
+# ============================================================
+
+cmd_activate() {
+    local volume="${1:?Usage: jeff activate /Volumes/YELLOW}"
+
+    if [[ ! -f "${volume}/heartbeat.json" ]]; then
+        fail "No heartbeat.json at ${volume}"
+        exit 1
+    fi
+
+    if [[ -f "${STATE_FILE}" ]]; then
+        local current
+        current=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('label',''))" 2>/dev/null || echo "")
+        if [[ -n "${current}" ]]; then
+            fail "Already active: ${current}. Deactivate first."
+            exit 1
+        fi
+    fi
+
+    # Verify identity
+    local chip_info
+    chip_info=$(python3 - "${volume}/heartbeat.json" << 'PYEOF'
+import json, sys, hashlib
+with open(sys.argv[1]) as f:
+    chip = json.load(f)
+if chip.get("format") != "booster-chip":
+    print("FAIL|Not a booster chip")
+    sys.exit(0)
+stored = chip.get("identity_hash", "")
+if stored:
+    copy = dict(chip)
+    copy["identity_hash"] = ""
+    computed = hashlib.sha256(json.dumps(copy, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    if computed != stored:
+        print("FAIL|Identity tampered")
+        sys.exit(0)
+root = chip.get("tool_chain", {}).get("root", "#000000")
+print("OK|%s|%s|%s|%s" % (chip.get("device_id",""), chip.get("label",""), chip.get("model",""), root))
+PYEOF
+    )
+
+    if [[ "${chip_info}" == FAIL* ]]; then
+        fail "${chip_info#FAIL|}"
+        exit 1
+    fi
+
+    local device_id label model root_color
+    device_id=$(echo "${chip_info}" | cut -d'|' -f2)
+    label=$(echo "${chip_info}" | cut -d'|' -f3)
+    model=$(echo "${chip_info}" | cut -d'|' -f4)
+    root_color=$(echo "${chip_info}" | cut -d'|' -f5)
+
+    # Resolve band
+    local band
+    band=$(python3 -c "import sys; sys.path.insert(0,'${SPECTRAL_DIR}'); from spectral import resolve; print(resolve('${root_color}').get('band','?'))" 2>/dev/null || echo "?")
+
+    echo ""
+    echo -e "  ${C_BOLD}Activating${C_RESET}"
+    echo -e "  Label:    ${C_CYAN}${label}${C_RESET}"
+    echo -e "  Device:   ${device_id:0:8}"
+    echo -e "  Root:     ${C_CYAN}${root_color}${C_RESET} (${band})"
+    echo ""
+
+    # Start MCP server
+    export CHIP_DEVICE_ID="${device_id}"
+    export CHIP_LABEL="${label}"
+    export CHIP_VOLUME="${volume}"
+    export CHIP_VAULT_MOUNT=""
+    export CHIP_MODEL="${model}"
+    export CHIP_MODE="activated"
+    export CHIP_FIRMWARE=""
+    export CHIP_CUESHEETS=""
+    export CHIP_USER_CUESHEETS=""
+    export CHIP_STATE=""
+    export CHIP_CREDENTIALS=""
+    export CHIP_LOGS=""
+
+    python3 "${CHIP_DIR}/mcp_server.py" &
+    local mcp_pid=$!
+    echo "${mcp_pid}" > "${MCP_PID_FILE}"
+    ok "MCP server (PID ${mcp_pid})"
+
+    # Write state
+    python3 - "${STATE_FILE}" "${device_id}" "${label}" "${volume}" "${mcp_pid}" "${model}" "${root_color}" "${band}" << 'PYEOF'
+import json, sys
+from datetime import datetime, timezone
+path = sys.argv[1]
+state = {
+    "device_id": sys.argv[2], "label": sys.argv[3], "volume_path": sys.argv[4],
+    "vault_mount": "", "mcp_pid": int(sys.argv[5]), "model": sys.argv[6],
+    "mode": "activated", "root_color": sys.argv[7], "band": sys.argv[8],
+    "activated_at": datetime.now(timezone.utc).isoformat()
+}
+with open(path, "w") as f:
+    json.dump(state, f, indent=2)
+PYEOF
+
+    echo ""
+    echo -e "  ${C_GREEN}Active: ${label} ${C_DIM}[${root_color}]${C_RESET}"
+    echo ""
+}
+
+# ============================================================
+# DEACTIVATE
+# ============================================================
+
+cmd_deactivate() {
+    if [[ ! -f "${STATE_FILE}" ]]; then
+        warn "No chip active."
+        exit 0
+    fi
+
+    local label
+    label=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('label','?'))" 2>/dev/null || echo "?")
+    local mcp_pid
+    mcp_pid=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('mcp_pid',''))" 2>/dev/null || echo "")
+
+    if [[ -n "${mcp_pid}" ]] && kill -0 "${mcp_pid}" 2>/dev/null; then
+        kill "${mcp_pid}" 2>/dev/null || true
+        sleep 1
+        kill -0 "${mcp_pid}" 2>/dev/null && kill -9 "${mcp_pid}" 2>/dev/null || true
+    fi
+    rm -f "${MCP_PID_FILE}" "${STATE_FILE}"
+
+    ok "Deactivated: ${label}"
+}
+
+# ============================================================
+# STATUS
+# ============================================================
+
+cmd_status() {
+    if [[ ! -f "${STATE_FILE}" ]]; then
+        echo ""
+        warn "No chip active."
+        echo ""
+        return
+    fi
+
+    python3 - "${STATE_FILE}" << 'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    s = json.load(f)
+print("")
+print("  Label:      %s" % s.get("label", "?"))
+print("  Device:     %s" % s.get("device_id", "?")[:8])
+print("  Mode:       %s" % s.get("mode", "?"))
+print("  Root:       %s (%s)" % (s.get("root_color", "?"), s.get("band", "?")))
+print("  Volume:     %s" % s.get("volume_path", "?"))
+vault = s.get("vault_mount", "")
+if vault:
+    print("  Vault:      %s" % vault)
+print("  Model:      %s" % (s.get("model") or "(none)"))
+mcp = s.get("mcp_pid", "")
+if mcp:
+    import os
+    try:
+        os.kill(int(mcp), 0)
+        print("  MCP:        running (PID %s)" % mcp)
+    except (OSError, ValueError):
+        print("  MCP:        stopped")
+print("  Since:      %s" % s.get("activated_at", "?")[:16])
+print("")
+PYEOF
+}
+
+# ============================================================
+# SPECTRAL COMMANDS
+# ============================================================
+
+cmd_resolve() {
+    python3 -c "
+import sys; sys.path.insert(0, '${SPECTRAL_DIR}')
+from spectral import resolve
+import json
+print(json.dumps(resolve('$1'), indent=2))
+"
+}
+
+cmd_midpoint() {
+    python3 -c "
+import sys; sys.path.insert(0, '${SPECTRAL_DIR}')
+from spectral import midpoint
+import json
+print(json.dumps(midpoint('$1', '$2'), indent=2))
+"
+}
+
+cmd_constellation() {
+    local hexes="$*"
+    python3 - "${SPECTRAL_DIR}" ${hexes} << 'PYEOF'
+import sys, json
+sys.path.insert(0, sys.argv[1])
+from spectral import constellation, constellation_summary
+colors = sys.argv[2:]
+groups = constellation(colors)
+print(json.dumps(groups, indent=2))
+print("")
+print("Summary: %s" % constellation_summary(colors))
+PYEOF
+}
+
+# ============================================================
+# INIT
+# ============================================================
+
+cmd_init() {
+    local volume="${1:?Usage: jeff init /Volumes/YELLOW [--label YELLOW]}"
+    shift
+
+    local label=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --label) label="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    if [[ -z "${label}" ]]; then
+        label=$(basename "${volume}")
+    fi
+
+    # Delegate to the chip init script
+    "${CHIP_DIR}/init.sh" "${volume}" --label "${label}"
+}
+
+# ============================================================
+# HELP
+# ============================================================
+
+cmd_help() {
+    echo -e "${C_DIM}${LOGO}${C_RESET}"
+    echo -e "  ${C_BOLD}Portable encrypted firmware cartridges for AI agents.${C_RESET}"
+    echo -e "  ${C_DIM}v${JEFF_VERSION} | 3DMATH${C_RESET}"
+    echo ""
+    echo "  Usage: jeff <command> [args]"
+    echo ""
+    echo "  Chip Management:"
+    echo "    scan                     Detect chips on mounted volumes"
+    echo "    activate <path>          Start MCP + heartbeat (no vault)"
+    echo "    deactivate               Stop everything"
+    echo "    mount [--read-write]     Decrypt vault for full access"
+    echo "    unmount                  Seal vault"
+    echo "    status                   Show active chip info"
+    echo "    init <path> [--label X]  Initialize a chip"
+    echo "    flash <disk> [--label X] Erase disk + init"
+    echo "    flip                     Toggle read-only / read-write"
+    echo ""
+    echo "  Spectral Binding:"
+    echo "    resolve <hex>            Resolve hex to spectral band"
+    echo "    midpoint <hex> <hex>     Find midpoint between two colors"
+    echo "    constellation <hex...>   Group colors by band proximity"
+    echo ""
+    echo "    version                  Show Jeff version"
+    echo ""
+}
+
+# ============================================================
+# VERSION
+# ============================================================
+
+cmd_version() {
+    echo "jeff ${JEFF_VERSION}"
+}
+
+# ============================================================
+# DISPATCH
+# ============================================================
+
+COMMAND="${1:-help}"
+shift 2>/dev/null || true
+
+case "${COMMAND}" in
+    scan)           cmd_scan ;;
+    activate)       cmd_activate "$@" ;;
+    deactivate)     cmd_deactivate ;;
+    status)         cmd_status ;;
+    init)           cmd_init "$@" ;;
+    resolve)        cmd_resolve "$@" ;;
+    midpoint)       cmd_midpoint "$@" ;;
+    constellation)  cmd_constellation "$@" ;;
+    version)        cmd_version ;;
+    help|--help|-h) cmd_help ;;
+    *)
+        fail "Unknown command: ${COMMAND}"
+        cmd_help
+        exit 1
+        ;;
+esac

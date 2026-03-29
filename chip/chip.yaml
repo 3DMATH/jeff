@@ -1,0 +1,26 @@
+name: Vanilla Booster Chip
+version: 1
+chip_type: vanilla
+description: General-purpose booster chip with local model inference and MCP tools.
+
+model:
+  name: qwen2.5:7b-instruct-q4_K_M
+  file: qwen2.5-7b-instruct.Q4_K_M.gguf
+  parameters:
+    temperature: 0.7
+    num_ctx: 4096
+    top_p: 0.9
+
+encryption:
+  method: hdiutil
+  cipher: AES-256
+  format: SPARSE
+  volume_name_suffix: "-vault"
+
+tools:
+  - chip_status
+  - chip_query
+  - chip_list_cuesheets
+  - chip_read_state
+  - chip_write_state
+  - chip_list_credentials

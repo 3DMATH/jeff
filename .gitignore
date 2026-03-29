@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.jeff-state.json
+.jeff-mcp.pid
+.jeff-heartbeat.pid

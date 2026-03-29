@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "mode": "read_only",
+  "writable_paths": [".kept", "state", "logs"],
+  "description": "Booster chip protocol. Content files are read-only. Only metadata, state, and logs are writable."
+}

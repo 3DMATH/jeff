@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "device_id": "PLACEHOLDER",
+  "created_at": "PLACEHOLDER",
+  "last_scan": null,
+  "last_sync": null,
+  "sync_history": [],
+  "file_count": 0,
+  "total_bytes": 0,
+  "entries": {}
+}

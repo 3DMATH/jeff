@@ -1,0 +1,29 @@
+name: Chip Status
+description: Check what this Booster Chip can do -- model, tools, credentials, state.
+icon: "💾"
+order: 1
+
+cues:
+  - id: check_status
+    objective: Report chip identity, model availability, and mounted resources.
+    context:
+      why: Orientation -- understand what tools and data are available on this chip.
+      constraints: Do not expose credential contents, only list filenames.
+      resources:
+        - chip_status
+        - chip_list_cuesheets
+        - chip_list_credentials
+      style:
+        tone: concise
+
+  - id: test_model
+    objective: Send a simple test query to verify the chip model is responding.
+    context:
+      why: Confirm inference is working before running domain CueSheets.
+      constraints: Keep the test query trivial to avoid wasting compute.
+      resources:
+        - chip_query
+      style:
+        tone: concise
+
+success_criteria: Chip identity confirmed, model responds, resources enumerated.
