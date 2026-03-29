@@ -8,10 +8,10 @@ import json
 import os
 import sys
 
-_CHIP_DIR = os.path.dirname(os.path.abspath(__file__))
-_JEFF_DIR = os.path.dirname(_CHIP_DIR)
-_SPECTRAL_DIR = os.path.join(_JEFF_DIR, "spectral")
-sys.path.insert(0, _SPECTRAL_DIR)
+# MCP server runs from the card: /Volumes/YELLOW/mcp/server.py
+# spectral.py and tool_chain.py are siblings in the same directory
+_MCP_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _MCP_DIR)
 
 from mcp.server.fastmcp import FastMCP
 
@@ -179,7 +179,6 @@ def chip_registry():
 def chip_query(prompt: str, system: str = "", max_tokens: int = 2048):
     """Ask the chip model a question."""
     try:
-        sys.path.insert(0, _CHIP_DIR)
         import inference
         return inference.generate(prompt=prompt, system=system or "You are Jeff, a helpful assistant on a Booster Chip.", max_tokens=max_tokens)
     except Exception as exc:

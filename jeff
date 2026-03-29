@@ -189,7 +189,7 @@ PYEOF
     echo -e "  Root:     ${C_CYAN}${root_color}${C_RESET} (${band})"
     echo ""
 
-    # Start MCP server
+    # Start MCP server FROM THE CARD
     export CHIP_DEVICE_ID="${device_id}"
     export CHIP_LABEL="${label}"
     export CHIP_VOLUME="${volume}"
@@ -203,7 +203,14 @@ PYEOF
     export CHIP_CREDENTIALS=""
     export CHIP_LOGS=""
 
-    python3 "${CHIP_DIR}/mcp_server.py" &
+    # Run from card if available, fall back to host copy
+    local mcp_server="${volume}/mcp/server.py"
+    if [[ ! -f "${mcp_server}" ]]; then
+        mcp_server="${CHIP_DIR}/mcp_server.py"
+        warn "No MCP on card -- using host copy"
+    fi
+
+    python3 "${mcp_server}" &
     local mcp_pid=$!
     echo "${mcp_pid}" > "${MCP_PID_FILE}"
     ok "MCP server (PID ${mcp_pid})"
@@ -333,23 +340,7 @@ PYEOF
 # ============================================================
 
 cmd_init() {
-    local volume="${1:?Usage: jeff init /Volumes/YELLOW [--label YELLOW]}"
-    shift
-
-    local label=""
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --label) label="$2"; shift 2 ;;
-            *) shift ;;
-        esac
-    done
-
-    if [[ -z "${label}" ]]; then
-        label=$(basename "${volume}")
-    fi
-
-    # Delegate to the chip init script
-    "${CHIP_DIR}/init.sh" "${volume}" --label "${label}"
+    "${CHIP_DIR}/init.sh" "$@"
 }
 
 # ============================================================
