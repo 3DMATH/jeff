@@ -28,21 +28,74 @@ import json
 
 
 # ============================================================
-# LEVEL 0 BAND REGISTRY
+# PERIODIC TABLE -- first 21 elements as band labels
 # ============================================================
-# 6 bands at 60 degrees each, matching the VRGB hue wheel.
-# Each can subdivide to 21 sub-bands (Level 1), and so on.
+# 21 elements = 21 max bands per level (Miller's number).
+# Same labels at every zoom level. Element number = band index.
+# Addresses are element paths: H.Li.B = band 1, sub 3, sub-sub 5.
 
-BANDS_L0 = [
-    {"name": "client",     "hue_start": 0,   "hue_end": 60,  "description": "Client delivery, creative output"},
-    {"name": "financial",  "hue_start": 60,  "hue_end": 120, "description": "Financial, planning, operations"},
-    {"name": "vault",      "hue_start": 120, "hue_end": 180, "description": "Vault, content, media"},
-    {"name": "platform",   "hue_start": 180, "hue_end": 240, "description": "Platform engineering, infrastructure"},
-    {"name": "research",   "hue_start": 240, "hue_end": 300, "description": "Research, markets, exploration"},
-    {"name": "experiment", "hue_start": 300, "hue_end": 360, "description": "Games, experiments, play"},
+ELEMENTS = [
+    {"z": 1,  "symbol": "H",  "name": "Hydrogen"},
+    {"z": 2,  "symbol": "He", "name": "Helium"},
+    {"z": 3,  "symbol": "Li", "name": "Lithium"},
+    {"z": 4,  "symbol": "Be", "name": "Beryllium"},
+    {"z": 5,  "symbol": "B",  "name": "Boron"},
+    {"z": 6,  "symbol": "C",  "name": "Carbon"},
+    {"z": 7,  "symbol": "N",  "name": "Nitrogen"},
+    {"z": 8,  "symbol": "O",  "name": "Oxygen"},
+    {"z": 9,  "symbol": "F",  "name": "Fluorine"},
+    {"z": 10, "symbol": "Ne", "name": "Neon"},
+    {"z": 11, "symbol": "Na", "name": "Sodium"},
+    {"z": 12, "symbol": "Mg", "name": "Magnesium"},
+    {"z": 13, "symbol": "Al", "name": "Aluminum"},
+    {"z": 14, "symbol": "Si", "name": "Silicon"},
+    {"z": 15, "symbol": "P",  "name": "Phosphorus"},
+    {"z": 16, "symbol": "S",  "name": "Sulfur"},
+    {"z": 17, "symbol": "Cl", "name": "Chlorine"},
+    {"z": 18, "symbol": "Ar", "name": "Argon"},
+    {"z": 19, "symbol": "K",  "name": "Potassium"},
+    {"z": 20, "symbol": "Ca", "name": "Calcium"},
+    {"z": 21, "symbol": "Sc", "name": "Scandium"},
 ]
 
 MAX_BANDS_PER_LEVEL = 21
+
+
+def _element_for_index(index):
+    """Get element symbol for a band index (0-based)."""
+    if 0 <= index < len(ELEMENTS):
+        return ELEMENTS[index]["symbol"]
+    return str(index)
+
+
+def _element_name_for_index(index):
+    """Get element full name for a band index (0-based)."""
+    if 0 <= index < len(ELEMENTS):
+        return ELEMENTS[index]["name"]
+    return "Band %d" % index
+
+
+# ============================================================
+# LEVEL 0 BAND REGISTRY
+# ============================================================
+# 6 bands at 60 degrees each. Labeled with elements 1-6.
+# Each can subdivide to 21 sub-bands (Level 1), and so on.
+
+def _build_l0_bands(n=6):
+    """Build Level 0 bands from the first n elements."""
+    bands = []
+    step = 360.0 / n
+    for i in range(n):
+        bands.append({
+            "name": _element_for_index(i),
+            "full_name": _element_name_for_index(i),
+            "index": i,
+            "hue_start": i * step,
+            "hue_end": (i + 1) * step,
+        })
+    return bands
+
+BANDS_L0 = _build_l0_bands(6)
 
 
 # ============================================================
@@ -106,6 +159,8 @@ def _find_band(hue, bands=None):
 def subdivide(band, n=None):
     """Subdivide a band into n equal sub-bands. Max 21.
 
+    Sub-bands are labeled with element symbols (H through Sc).
+
     Args:
         band: Dict with hue_start, hue_end, name.
         n: Number of sub-bands. Defaults to MAX_BANDS_PER_LEVEL.
@@ -124,15 +179,19 @@ def subdivide(band, n=None):
         width = 360
     step = width / n
 
+    parent_name = band["name"]
     subs = []
     for i in range(n):
         sub_start = (start + i * step) % 360
         sub_end = (start + (i + 1) * step) % 360
+        symbol = _element_for_index(i)
         subs.append({
-            "name": "%s_%d" % (band["name"], i),
+            "name": "%s.%s" % (parent_name, symbol),
+            "symbol": symbol,
+            "full_name": _element_name_for_index(i),
             "hue_start": sub_start,
             "hue_end": sub_end,
-            "parent": band["name"],
+            "parent": parent_name,
             "index": i,
         })
     return subs
@@ -166,7 +225,8 @@ def resolve(hex_color):
         "saturation": round(s, 4),
         "lightness": round(l, 4),
         "band": band["name"],
-        "band_description": band.get("description", ""),
+        "element": band["name"],
+        "element_name": band.get("full_name", ""),
         "band_range": [band["hue_start"], band["hue_end"]],
         "position": round(position, 4),
         "level": 0,
@@ -177,15 +237,18 @@ def resolve(hex_color):
 def resolve_deep(hex_color, depth=3):
     """Resolve a hex color through multiple zoom levels.
 
+    Returns element path (e.g. "He.P.N") and per-level detail.
+
     Args:
         hex_color: 6-char hex with # prefix.
         depth: How many levels deep to resolve.
 
     Returns:
-        List of resolution dicts, one per level.
+        Dict with path (element path string) and levels (list of per-level dicts).
     """
     h, s, l = hex_to_hsl(hex_color)
     levels = []
+    path_parts = []
     current_bands = BANDS_L0
 
     for level in range(depth):
@@ -195,8 +258,14 @@ def resolve_deep(hex_color, depth=3):
             band_width = 360
         position = ((h - band["hue_start"]) % 360) / band_width
 
+        # Extract the element symbol (last part of dotted name)
+        symbol = band["name"].split(".")[-1] if "." in band["name"] else band["name"]
+        path_parts.append(symbol)
+
         levels.append({
             "level": level,
+            "element": symbol,
+            "element_name": band.get("full_name", ""),
             "band": band["name"],
             "band_range": [round(band["hue_start"], 4), round(band["hue_end"], 4)],
             "position": round(position, 4),
@@ -206,7 +275,11 @@ def resolve_deep(hex_color, depth=3):
         # Subdivide for next level
         current_bands = subdivide(band)
 
-    return levels
+    return {
+        "hex": hex_color.upper() if hex_color.startswith("#") else "#" + hex_color.upper(),
+        "path": ".".join(path_parts),
+        "levels": levels,
+    }
 
 
 # ============================================================
@@ -419,9 +492,9 @@ if __name__ == "__main__":
 
     elif cmd == "registry":
         for band in BANDS_L0:
-            print("  %3d-%3d  %-12s %s" % (
+            print("  %3d-%3d  %-4s %s" % (
                 band["hue_start"], band["hue_end"],
-                band["name"], band["description"]
+                band["name"], band.get("full_name", "")
             ))
 
     elif cmd == "subdivide":
