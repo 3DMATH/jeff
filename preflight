@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# ============================================================
+#  jeff preflight -- validate MCP proxy before restart
+# ============================================================
+#  Checks: syntax, imports, tool registration, chip state.
+#  Run this BEFORE restarting Claude Code to catch errors cheap.
+#
+#  Usage: jeff preflight
+#         ./tools/jeff/preflight
+#         ./tools/jeff/preflight --verbose
+# ============================================================
+
+set -uo pipefail
+
+JEFF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROXY="${JEFF_DIR}/mcp_proxy.py"
+STATE_FILE="${JEFF_DIR}/.jeff-state.json"
+EXPECTED_TOOLS=12
+VERBOSE=0
+QUIET=0
+
+for arg in "$@"; do
+    case "${arg}" in
+        --verbose|-v) VERBOSE=1 ;;
+        --quiet|-q)   QUIET=1 ;;
+    esac
+done
+
+C_RESET="\033[0m"
+C_GREEN="\033[32m"
+C_YELLOW="\033[33m"
+C_RED="\033[31m"
+C_DIM="\033[2m"
+
+PASS=0
+WARN=0
+FAIL=0
+
+pass() { PASS=$((PASS + 1)); [[ $QUIET -eq 0 ]] && echo -e "  ${C_GREEN}PASS${C_RESET}  $1"; }
+warn() { WARN=$((WARN + 1)); [[ $QUIET -eq 0 ]] && echo -e "  ${C_YELLOW}WARN${C_RESET}  $1"; }
+fail() { FAIL=$((FAIL + 1)); [[ $QUIET -eq 0 ]] && echo -e "  ${C_RED}FAIL${C_RESET}  $1"; }
+dim()  { [[ $VERBOSE -eq 1 ]] && echo -e "  ${C_DIM}      $1${C_RESET}"; }
+
+if [[ $QUIET -eq 0 ]]; then
+    echo ""
+    echo "  jeff preflight"
+    echo "  =============="
+    echo ""
+fi
+
+# ----------------------------------------------------------
+# 1. Proxy file exists
+# ----------------------------------------------------------
+if [[ -f "${PROXY}" ]]; then
+    pass "mcp_proxy.py exists"
+else
+    fail "mcp_proxy.py not found at ${PROXY}"
+    echo ""
+    echo "  ${FAIL} failed -- cannot continue"
+    exit 1
+fi
+
+# ----------------------------------------------------------
+# 2. Python syntax check (catches the exact class of bug we just hit)
+# ----------------------------------------------------------
+SYNTAX_OUT=$(python3 -c "import ast; ast.parse(open('${PROXY}').read())" 2>&1)
+if [[ $? -eq 0 ]]; then
+    pass "syntax valid"
+else
+    fail "syntax error in mcp_proxy.py"
+    echo "${SYNTAX_OUT}" | head -5 | while read -r line; do dim "${line}"; done
+fi
+
+# ----------------------------------------------------------
+# 3. Module imports cleanly (catches missing deps, bad imports)
+# ----------------------------------------------------------
+IMPORT_OUT=$(cd "${JEFF_DIR}" && python3 -c "
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location('mcp_proxy', '${PROXY}')
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print('OK')
+" 2>&1)
+
+if [[ "${IMPORT_OUT}" == *"OK"* ]]; then
+    pass "module imports clean"
+else
+    fail "module import failed"
+    echo "${IMPORT_OUT}" | tail -5 | while read -r line; do dim "${line}"; done
+fi
+
+# ----------------------------------------------------------
+# 4. Tool count matches expected
+# ----------------------------------------------------------
+TOOL_COUNT=$(cd "${JEFF_DIR}" && python3 -c "
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location('mcp_proxy', '${PROXY}')
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+tools = mod.mcp._tool_manager._tools if hasattr(mod.mcp, '_tool_manager') else {}
+print(len(tools))
+" 2>&1)
+
+if [[ "${TOOL_COUNT}" =~ ^[0-9]+$ ]]; then
+    if [[ "${TOOL_COUNT}" -eq "${EXPECTED_TOOLS}" ]]; then
+        pass "tool count: ${TOOL_COUNT}/${EXPECTED_TOOLS}"
+    elif [[ "${TOOL_COUNT}" -gt 0 ]]; then
+        warn "tool count: ${TOOL_COUNT} (expected ${EXPECTED_TOOLS})"
+    else
+        fail "no tools registered"
+    fi
+else
+    warn "could not count tools"
+    dim "${TOOL_COUNT}"
+fi
+
+# ----------------------------------------------------------
+# 5. Spectral module loads
+# ----------------------------------------------------------
+SPECTRAL_OUT=$(cd "${JEFF_DIR}" && python3 -c "
+import sys
+sys.path.insert(0, '${JEFF_DIR}/spectral')
+import spectral
+r = spectral.resolve('#359B13')
+print(r.get('band', 'FAIL'))
+" 2>&1)
+
+if [[ "${SPECTRAL_OUT}" != "FAIL" && "${SPECTRAL_OUT}" != "" && "${SPECTRAL_OUT}" != *"Error"* ]]; then
+    pass "spectral module OK (band: ${SPECTRAL_OUT})"
+else
+    fail "spectral module broken"
+    dim "${SPECTRAL_OUT}"
+fi
+
+# ----------------------------------------------------------
+# 6. Chip state file
+# ----------------------------------------------------------
+if [[ -f "${STATE_FILE}" ]]; then
+    CHIP_LABEL=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('label','?'))" 2>/dev/null)
+    CHIP_VOL=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('volume_path',''))" 2>/dev/null)
+
+    if [[ -n "${CHIP_VOL}" && -d "${CHIP_VOL}" ]]; then
+        pass "chip state: ${CHIP_LABEL} at ${CHIP_VOL}"
+
+        # 6a. heartbeat.json readable
+        if [[ -f "${CHIP_VOL}/heartbeat.json" ]]; then
+            pass "heartbeat.json present"
+        else
+            fail "heartbeat.json missing from ${CHIP_VOL}"
+        fi
+    else
+        warn "chip state exists but volume not mounted (${CHIP_LABEL})"
+        dim "volume_path: ${CHIP_VOL}"
+    fi
+else
+    warn "no chip state (.jeff-state.json absent)"
+    dim "run: jeff activate /Volumes/NAME"
+fi
+
+# ----------------------------------------------------------
+# 7. MCP dependencies
+# ----------------------------------------------------------
+MCP_DEP=$(python3 -c "import mcp; print('OK')" 2>&1)
+if [[ "${MCP_DEP}" == "OK" ]]; then
+    pass "mcp package installed"
+else
+    fail "mcp package missing (pip install mcp)"
+fi
+
+# ----------------------------------------------------------
+# SUMMARY
+# ----------------------------------------------------------
+TOTAL=$((PASS + WARN + FAIL))
+if [[ $QUIET -eq 0 ]]; then
+    echo ""
+    if [[ ${FAIL} -eq 0 && ${WARN} -eq 0 ]]; then
+        echo -e "  ${C_GREEN}ALL CLEAR${C_RESET} -- ${PASS}/${TOTAL} passed. Safe to restart."
+    elif [[ ${FAIL} -eq 0 ]]; then
+        echo -e "  ${C_YELLOW}OK WITH WARNINGS${C_RESET} -- ${PASS} passed, ${WARN} warnings. Restart should work."
+    else
+        echo -e "  ${C_RED}NOT READY${C_RESET} -- ${FAIL} failed, ${WARN} warnings. Fix before restarting."
+    fi
+    echo ""
+fi
+
+exit ${FAIL}

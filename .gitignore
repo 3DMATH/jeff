@@ -5,3 +5,4 @@ __pycache__/
 .jeff-state.json
 .jeff-mcp.pid
 .jeff-heartbeat.pid
+.jeff-mcp.log
