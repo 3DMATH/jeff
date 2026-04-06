@@ -22,12 +22,22 @@
 #
 #  Diagnostics:
 #    status                   Detailed chip info
+#    state                    Machine-readable state (JSON)
 #    preflight                Validate MCP proxy before restart
 #
 #  Spectral:
 #    resolve <hex>            Resolve hex to spectral band
 #    midpoint <a> <b>         Find midpoint between two colors
 #    constellation <hex...>   Group colors by band proximity
+#
+#  Discovery:
+#    scan --json              Chips as JSON array
+#    disks --flashable        External disks as JSON
+#    disks --uninitialized    Blank volumes as JSON
+#
+#  CueSheet:
+#    cuesheet generate        Generate chip cuesheet
+#    cuesheet clean           Remove injected cuesheet
 #
 #  Admin (destructive -- requires confirmation):
 #    admin flash <disk>       Erase disk + burn fresh chip
@@ -497,13 +507,21 @@ cmd_down() {
 # ============================================================
 
 cmd_scan() {
-    echo -e "${C_BOLD}  Scanning for chips${C_RESET}"
-    echo ""
+    local json_mode=false
+    if [[ "${1:-}" == "--json" ]]; then
+        json_mode=true
+    fi
 
-    python3 - "${SPECTRAL_DIR}" << 'PYEOF'
+    if [[ "${json_mode}" == "false" ]]; then
+        echo -e "${C_BOLD}  Scanning for chips${C_RESET}"
+        echo ""
+    fi
+
+    python3 - "${SPECTRAL_DIR}" "${json_mode}" << 'PYEOF'
 import os, json, sys
 
 spectral_dir = sys.argv[1]
+json_mode = sys.argv[2] == "true"
 sys.path.insert(0, spectral_dir)
 
 try:
@@ -539,6 +557,10 @@ if os.path.isdir(volumes_dir):
         except Exception:
             continue
 
+if json_mode:
+    print(json.dumps(found))
+    exit(0)
+
 if not found:
     print("  No chips detected. Insert an SD card with heartbeat.json.")
     exit(0)
@@ -558,7 +580,9 @@ if len(found) > 1 and HAS_SPECTRAL:
         print("  Constellation: %s" % constellation_summary(roots))
 PYEOF
 
-    _hint
+    if [[ "${json_mode}" == "false" ]]; then
+        _hint
+    fi
 }
 
 # ============================================================
@@ -968,6 +992,10 @@ PYEOF
     _hint
 }
 
+cmd_state() {
+    cat "${STATE_FILE}" 2>/dev/null || echo "{}"
+}
+
 # ============================================================
 # SPECTRAL COMMANDS
 # ============================================================
@@ -1005,6 +1033,177 @@ PYEOF
 }
 
 # ============================================================
+# DISKS (machine-readable disk discovery)
+# ============================================================
+
+cmd_disks() {
+    local mode="${1:---flashable}"
+
+    python3 - "${mode}" << 'PYEOF'
+import subprocess, os, json, sys
+
+mode = sys.argv[1]
+
+boot_info = subprocess.run(["diskutil", "info", "/"], capture_output=True, text=True)
+boot_disk = ""
+for line in boot_info.stdout.split("\n"):
+    if "Part of Whole" in line:
+        boot_disk = line.split()[-1]
+        break
+
+if mode == "--flashable":
+    found = {}
+    for vname in sorted(os.listdir("/Volumes")):
+        vol_path = os.path.join("/Volumes", vname)
+        if not os.path.isdir(vol_path):
+            continue
+        info = subprocess.run(["diskutil", "info", vol_path], capture_output=True, text=True)
+        parent_disk = ""
+        size = ""
+        for il in info.stdout.split("\n"):
+            if "Part of Whole" in il:
+                parent_disk = il.split()[-1]
+            if "Disk Size" in il:
+                size = il.split(":")[-1].strip().split("(")[0].strip()
+        if not parent_disk or parent_disk == boot_disk:
+            continue
+        disk_dev = "/dev/" + parent_disk
+        if disk_dev in found:
+            continue
+        hb = os.path.join(vol_path, "heartbeat.json")
+        label = vname
+        has_chip = False
+        if os.path.isfile(hb):
+            has_chip = True
+            try:
+                with open(hb) as f:
+                    chip = json.load(f)
+                label = chip.get("label", vname)
+            except Exception:
+                pass
+        found[disk_dev] = {"disk": disk_dev, "label": label, "size": size, "has_chip": has_chip}
+    print(json.dumps(list(found.values())))
+
+elif mode == "--uninitialized":
+    found = []
+    for vname in sorted(os.listdir("/Volumes")):
+        vol_path = os.path.join("/Volumes", vname)
+        if not os.path.isdir(vol_path):
+            continue
+        info = subprocess.run(["diskutil", "info", vol_path], capture_output=True, text=True)
+        parent_disk = ""
+        for il in info.stdout.split("\n"):
+            if "Part of Whole" in il:
+                parent_disk = il.split()[-1]
+        if not parent_disk or parent_disk == boot_disk:
+            continue
+        hb = os.path.join(vol_path, "heartbeat.json")
+        if not os.path.isfile(hb):
+            found.append({"path": vol_path, "name": vname})
+    print(json.dumps(found))
+
+else:
+    print("[]")
+PYEOF
+}
+
+# ============================================================
+# CUESHEET (generate/clean chip cuesheets)
+# ============================================================
+
+cmd_cuesheet() {
+    local subcmd="${1:-}"
+    shift 2>/dev/null || true
+
+    case "${subcmd}" in
+        generate)   _cuesheet_generate "$@" ;;
+        clean)      _cuesheet_clean ;;
+        "")
+            echo "  Usage: jeff cuesheet generate --output-dir DIR"
+            echo "         jeff cuesheet clean"
+            ;;
+        *)
+            fail "Unknown cuesheet command: ${subcmd}"
+            exit 1
+            ;;
+    esac
+}
+
+_cuesheet_generate() {
+    local output_dir=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --output-dir)  output_dir="$2"; shift 2 ;;
+            *)             echo "Unknown arg: $1"; exit 1 ;;
+        esac
+    done
+
+    if [[ -z "${output_dir}" ]]; then
+        fail "Missing --output-dir"
+        exit 1
+    fi
+
+    if [[ ! -f "${STATE_FILE}" ]]; then
+        fail "No chip active"
+        exit 1
+    fi
+
+    python3 - "${STATE_FILE}" "${output_dir}" "${JEFF_DIR}/cuesheets/chip-template.yaml" << 'PYEOF'
+import json, sys, os
+
+state_path, output_dir, template_path = sys.argv[1:4]
+
+with open(state_path) as f:
+    state = json.load(f)
+
+label = state.get("label", "Chip")
+root_color = state.get("root_color", "#000000")
+band = state.get("band", "?")
+slug = label.lower().replace(" ", "-")
+path = os.path.join(output_dir, "_jeff-%s.yaml" % slug)
+
+with open(template_path) as f:
+    template = f.read()
+
+yaml_content = template.replace("{{label}}", label).replace("{{root_color}}", root_color).replace("{{band}}", band)
+
+with open(path, "w") as f:
+    f.write(yaml_content)
+
+# Store cuesheet path in state for cleanup
+state["cuesheet_injection"] = path
+with open(state_path, "w") as f:
+    json.dump(state, f, indent=2)
+
+# Output the path so caller can use it
+print(path)
+PYEOF
+}
+
+_cuesheet_clean() {
+    if [[ ! -f "${STATE_FILE}" ]]; then
+        return 0
+    fi
+
+    python3 - "${STATE_FILE}" << 'PYEOF'
+import json, sys, os
+
+state_path = sys.argv[1]
+with open(state_path) as f:
+    state = json.load(f)
+
+cs_path = state.get("cuesheet_injection", "")
+if cs_path and os.path.isfile(cs_path):
+    os.remove(cs_path)
+
+if "cuesheet_injection" in state:
+    del state["cuesheet_injection"]
+    with open(state_path, "w") as f:
+        json.dump(state, f, indent=2)
+PYEOF
+}
+
+# ============================================================
 # ADMIN (destructive -- behind glass)
 # ============================================================
 
@@ -1035,7 +1234,7 @@ cmd_admin_flash() {
     local disk="${1:?Usage: jeff admin flash /dev/diskN [--label NAME] [--size 8g]}"
     shift
 
-    local label="" vault_size="8g" model_name="qwen2.5:7b-instruct-q4_K_M"
+    local label="" vault_size="8g" model_name="qwen2.5:7b-instruct-q4_K_M" skip_confirm=false
 
     # Try to detect existing volume name
     local existing
@@ -1051,6 +1250,7 @@ cmd_admin_flash() {
             --label)  label="$2"; shift 2 ;;
             --size)   vault_size="$2"; shift 2 ;;
             --model)  model_name="$2"; shift 2 ;;
+            --yes)    skip_confirm=true; shift ;;
             *)        echo "Unknown arg: $1"; exit 1 ;;
         esac
     done
@@ -1081,14 +1281,17 @@ cmd_admin_flash() {
     echo ""
 
     # Require typing the disk identifier to confirm (not just YES)
-    local disk_short
-    disk_short=$(basename "${disk}")
-    echo -e "  Type ${C_BOLD}ERASE ${disk_short}${C_RESET} to confirm:"
-    read -rp "  > " CONFIRM
-    echo ""
-    if [[ "${CONFIRM}" != "ERASE ${disk_short}" ]]; then
-        echo "  Aborted."
-        exit 1
+    # --yes skips this gate (caller already confirmed, e.g. maestro TUI)
+    if [[ "${skip_confirm}" == "false" ]]; then
+        local disk_short
+        disk_short=$(basename "${disk}")
+        echo -e "  Type ${C_BOLD}ERASE ${disk_short}${C_RESET} to confirm:"
+        read -rp "  > " CONFIRM
+        echo ""
+        if [[ "${CONFIRM}" != "ERASE ${disk_short}" ]]; then
+            echo "  Aborted."
+            exit 1
+        fi
     fi
 
     # Erase
@@ -1110,7 +1313,8 @@ cmd_admin_flash() {
     "${CHIP_DIR}/init.sh" "${mount_point}" \
         --label "${label}" \
         --size "${vault_size}" \
-        --model "${model_name}"
+        --model "${model_name}" \
+        --skip-reformat
 
     echo ""
     ok "Chip ready: ${label}"
@@ -1149,6 +1353,7 @@ cmd_help() {
     echo ""
     echo "  Diagnostics:"
     echo "    status                   Detailed chip info"
+    echo "    state                    Machine-readable state (JSON)"
     echo "    preflight                Validate MCP proxy before restart"
     echo ""
     echo "  Spectral:"
@@ -1156,14 +1361,40 @@ cmd_help() {
     echo "    midpoint <hex> <hex>     Midpoint between two colors"
     echo "    constellation <hex...>   Group colors by band proximity"
     echo ""
+    echo "  Discovery:"
+    echo "    scan --json              Chips as JSON array"
+    echo "    disks --flashable        External disks as JSON"
+    echo "    disks --uninitialized    Blank volumes as JSON"
+    echo ""
+    echo "  CueSheet:"
+    echo "    cuesheet generate        Generate chip cuesheet"
+    echo "    cuesheet clean           Remove injected cuesheet"
+    echo ""
     echo -e "  ${C_RED}Admin (destructive -- requires confirmation):${C_RESET}"
     echo "    admin flash <disk>       Erase disk + burn fresh chip"
     echo "    admin init <path>        Burn chip on formatted volume"
+    echo ""
+    echo "  Volumes:"
+    echo "    vol                      List all volumes + status"
+    echo "    vol up <name>            Activate volume (updates .mcp.json)"
+    echo "    vol down <name>          Deactivate volume"
     echo ""
     echo "  Info:"
     echo "    version                  Show version"
     echo "    help                     This message"
     echo ""
+}
+
+# ============================================================
+# VOLUMES
+# ============================================================
+
+VOL_SCRIPT="${JEFF_DIR}/vol.py"
+
+cmd_vol() {
+    local subcmd="${1:-list}"
+    shift 2>/dev/null || true
+    python3 "${VOL_SCRIPT}" "${subcmd}" "$@"
 }
 
 # ============================================================
@@ -1185,7 +1416,7 @@ case "${COMMAND}" in
     # Chip slot
     up)             cmd_up "$@" ;;
     down)           cmd_down ;;
-    scan)           cmd_scan ;;
+    scan)           cmd_scan "$@" ;;
     check)          cmd_check ;;
 
     # Vault
@@ -1195,12 +1426,19 @@ case "${COMMAND}" in
 
     # Diagnostics
     status)         cmd_status ;;
+    state)          cmd_state ;;
     preflight)      exec "${JEFF_DIR}/preflight" "$@" ;;
 
     # Spectral
     resolve)        cmd_resolve "$@" ;;
     midpoint)       cmd_midpoint "$@" ;;
     constellation)  cmd_constellation "$@" ;;
+
+    # Discovery
+    disks)          cmd_disks "$@" ;;
+
+    # CueSheet
+    cuesheet)       cmd_cuesheet "$@" ;;
 
     # Admin (behind glass)
     admin)          cmd_admin "$@" ;;
@@ -1222,6 +1460,9 @@ case "${COMMAND}" in
         echo ""
         exit 1
         ;;
+
+    # Volumes
+    vol)            cmd_vol "$@" ;;
 
     # Dashboard (default)
     dashboard)      cmd_dashboard ;;

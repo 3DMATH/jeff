@@ -1,0 +1,36 @@
+[
+  {
+    "name": "hot",
+    "type": "local",
+    "path": "vault-hot",
+    "auto_activate": true,
+    "env": {"VAULT_NAME": "hot"}
+  },
+  {
+    "name": "cold",
+    "type": "local",
+    "path": "vault-cold",
+    "auto_activate": false,
+    "env": {"VAULT_NAME": "cold", "VAULT_MODE": "lite"}
+  },
+  {
+    "name": "chip-red",
+    "type": "chip",
+    "path": "chip-red"
+  },
+  {
+    "name": "chip-yellow",
+    "type": "chip",
+    "path": "chip-yellow"
+  },
+  {
+    "name": "chip-blue",
+    "type": "chip",
+    "path": "chip-blue"
+  },
+  {
+    "name": "chip-gray",
+    "type": "chip",
+    "path": "chip-gray"
+  }
+]
