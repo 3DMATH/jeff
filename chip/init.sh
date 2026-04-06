@@ -29,13 +29,15 @@ shift
 LABEL=""
 VAULT_SIZE="4g"
 MODEL_NAME="qwen2.5:7b-instruct-q4_K_M"
+SKIP_REFORMAT=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --label)  LABEL="$2"; shift 2 ;;
-        --size)   VAULT_SIZE="$2"; shift 2 ;;
-        --model)  MODEL_NAME="$2"; shift 2 ;;
-        *)        echo "Unknown arg: $1"; exit 1 ;;
+        --label)          LABEL="$2"; shift 2 ;;
+        --size)           VAULT_SIZE="$2"; shift 2 ;;
+        --model)          MODEL_NAME="$2"; shift 2 ;;
+        --skip-reformat)  SKIP_REFORMAT=true; shift ;;
+        *)                echo "Unknown arg: $1"; exit 1 ;;
     esac
 done
 
@@ -62,9 +64,9 @@ if ! command -v hdiutil >/dev/null 2>&1; then
     exit 1
 fi
 
-# Auto-reformat FAT32 to ExFAT
+# Auto-reformat FAT32 to ExFAT (skip when called from flash -- already formatted)
 FS_TYPE=$(diskutil info "${VOLUME_PATH}" 2>/dev/null | grep "File System Personality" | sed 's/.*: *//')
-if echo "${FS_TYPE}" | grep -qi "fat32\|msdos\|ms-dos"; then
+if [[ "${SKIP_REFORMAT}" == "false" ]] && echo "${FS_TYPE}" | grep -qi "fat32\|msdos\|ms-dos"; then
     echo "  Reformatting FAT32 to ExFAT..."
     DISK_ID=$(diskutil info "${VOLUME_PATH}" 2>/dev/null | grep "Part of Whole" | awk '{print $NF}')
     diskutil eraseDisk ExFAT "${LABEL}" GPT "/dev/${DISK_ID}"
