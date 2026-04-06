@@ -66,8 +66,10 @@ def _store_blob(filepath, file_hash=None):
 
 
 def _walk_content(chip_dir):
-    """Walk HOT/ and COLD/ in a chip directory, yielding (rel_path, abs_path)."""
+    """Walk HOT/, COLD/, and vault.db files, yielding (rel_path, abs_path)."""
     chip = Path(chip_dir)
+
+    # Walk content directories
     for port_name in ("HOT", "COLD"):
         port = chip / port_name
         if not port.is_dir():
@@ -81,6 +83,13 @@ def _walk_content(chip_dir):
                 abs_path = os.path.join(root, filename)
                 rel_path = os.path.relpath(abs_path, str(chip))
                 yield rel_path, abs_path
+
+    # Include vault.db files (live state for apps like Markets)
+    for db_file in chip.glob("vault.db"):
+        yield db_file.name, str(db_file)
+    # Also check vault subdirectories (chip volumes have vault-*/vault.db)
+    for db_file in chip.glob("vault-*/vault.db"):
+        yield str(db_file.relative_to(chip)), str(db_file)
 
 
 def backup(chip_name, chip_dir):
