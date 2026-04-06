@@ -1378,6 +1378,7 @@ cmd_help() {
     echo "    vol                      List all volumes + status"
     echo "    vol up <name>            Activate volume (updates .mcp.json)"
     echo "    vol down <name>          Deactivate volume"
+    echo "    graduate <slug> <target> Move entry from HOT to target vault"
     echo ""
     echo "  Info:"
     echo "    version                  Show version"
@@ -1390,11 +1391,32 @@ cmd_help() {
 # ============================================================
 
 VOL_SCRIPT="${JEFF_DIR}/vol.py"
+GRADUATE_SCRIPT="${JEFF_DIR}/graduate.py"
 
 cmd_vol() {
     local subcmd="${1:-list}"
     shift 2>/dev/null || true
     python3 "${VOL_SCRIPT}" "${subcmd}" "$@"
+}
+
+cmd_graduate() {
+    local slug="${1:-}"
+    local target="${2:-}"
+    local source="${3:-vault-hot}"
+
+    if [[ -z "${slug}" || -z "${target}" ]]; then
+        echo ""
+        echo "  Usage: jeff graduate <slug> <target-vault> [source-vault]"
+        echo ""
+        echo "  Example: jeff graduate 032726-1-bmgl-mktg chip-red/vault-bmgl"
+        echo "           jeff graduate my-entry chip-gray/vault-abits vault-cold"
+        echo ""
+        echo "  Default source: vault-hot"
+        echo ""
+        return 1
+    fi
+
+    python3 "${GRADUATE_SCRIPT}" "${slug}" "${source}" "${target}"
 }
 
 # ============================================================
@@ -1463,6 +1485,7 @@ case "${COMMAND}" in
 
     # Volumes
     vol)            cmd_vol "$@" ;;
+    graduate)       cmd_graduate "$@" ;;
 
     # Dashboard (default)
     dashboard)      cmd_dashboard ;;
