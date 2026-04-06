@@ -421,11 +421,39 @@ def _load_active_volumes():
 
 
 def _load_registry():
-    """Load volume registry."""
+    """Load volume registry, including physical chips at /Volumes/."""
     if not os.path.isfile(VOLUMES_FILE):
-        return []
-    with open(VOLUMES_FILE) as f:
-        return json.load(f)
+        registry = []
+    else:
+        with open(VOLUMES_FILE) as f:
+            registry = json.load(f)
+
+    # Scan /Volumes/ for physical chips
+    volumes_dir = "/Volumes"
+    if os.path.isdir(volumes_dir):
+        known_paths = {v["path"] for v in registry}
+        for name in sorted(os.listdir(volumes_dir)):
+            vol = os.path.join(volumes_dir, name)
+            hb = os.path.join(vol, "heartbeat.json")
+            if not os.path.isfile(hb) or name == "Macintosh HD":
+                continue
+            if vol in known_paths:
+                continue
+            try:
+                with open(hb) as f:
+                    chip = json.load(f)
+                label = chip.get("label", name)
+                registry.append({
+                    "name": "sd:%s" % label.lower(),
+                    "type": "chip",
+                    "path": vol,
+                    "physical": True,
+                    "label": label,
+                })
+            except Exception:
+                continue
+
+    return registry
 
 
 def _discover_active_vaults():
@@ -437,7 +465,7 @@ def _discover_active_vaults():
     for vol in registry:
         if vol["name"] not in active:
             continue
-        vol_path = os.path.join(MAESTRO_ROOT, vol["path"])
+        vol_path = vol["path"] if os.path.isabs(vol["path"]) else os.path.join(MAESTRO_ROOT, vol["path"])
         if not os.path.isdir(vol_path):
             continue
 

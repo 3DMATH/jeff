@@ -42,12 +42,47 @@ STATIC_MCP = {
 }
 
 
+VOLUMES_SCAN_DIR = Path("/Volumes")
+
+
 def load_registry():
-    """Load the volume registry."""
+    """Load the volume registry, including physical chips at /Volumes/."""
     if not VOLUMES_FILE.exists():
-        return []
-    with open(VOLUMES_FILE) as f:
-        return json.load(f)
+        registry = []
+    else:
+        with open(VOLUMES_FILE) as f:
+            registry = json.load(f)
+
+    # Scan /Volumes/ for physical chips with heartbeat.json
+    known_paths = {v["path"] for v in registry}
+    if VOLUMES_SCAN_DIR.is_dir():
+        for d in sorted(VOLUMES_SCAN_DIR.iterdir()):
+            hb = d / "heartbeat.json"
+            if not hb.is_file():
+                continue
+            # Skip macOS system volume
+            if d.name == "Macintosh HD":
+                continue
+            try:
+                with open(hb) as f:
+                    chip = json.load(f)
+                vol_path = str(d)
+                # Skip if a registry entry already points here
+                if vol_path in known_paths or str(d.relative_to("/")) in known_paths:
+                    continue
+                label = chip.get("label", d.name)
+                name = "sd:%s" % label.lower()
+                registry.append({
+                    "name": name,
+                    "type": "chip",
+                    "path": vol_path,
+                    "physical": True,
+                    "label": label,
+                })
+            except Exception:
+                continue
+
+    return registry
 
 
 def load_active():
@@ -98,9 +133,17 @@ def _vault_info(vault_path):
     return entries, images, size_str
 
 
+def _vol_path(vol):
+    """Resolve volume path -- absolute for physical chips, relative for repo."""
+    p = Path(vol["path"])
+    if p.is_absolute():
+        return p
+    return MAESTRO_ROOT / p
+
+
 def _discover_vaults(vol):
     """Discover vault directories for a volume."""
-    vol_path = MAESTRO_ROOT / vol["path"]
+    vol_path = _vol_path(vol)
     if not vol_path.exists():
         return []
 
@@ -123,7 +166,11 @@ def _mcp_entries_for_volume(vol):
         if not server_py.exists():
             continue
 
-        rel_path = str(server_py.relative_to(MAESTRO_ROOT))
+        try:
+            rel_path = str(server_py.relative_to(MAESTRO_ROOT))
+        except ValueError:
+            # Physical chip -- use absolute path
+            rel_path = str(server_py)
 
         if vol["type"] == "local":
             name = "vault-%s" % vol["name"]
@@ -176,7 +223,7 @@ def cmd_list():
     for vol in registry:
         is_active = vol["name"] in active
         marker = "+" if is_active else " "
-        vol_path = MAESTRO_ROOT / vol["path"]
+        vol_path = _vol_path(vol)
         exists = vol_path.exists()
 
         vaults = _discover_vaults(vol) if exists else []
@@ -191,7 +238,8 @@ def cmd_list():
         else:
             detail = "empty"
 
-        print("  [%s] %-14s %-6s %s" % (marker, vol["name"], vol["type"], detail))
+        vol_type = "sd" if vol.get("physical") else vol["type"]
+        print("  [%s] %-14s %-6s %s" % (marker, vol["name"], vol_type, detail))
 
 
 def cmd_up(name):
@@ -202,7 +250,7 @@ def cmd_up(name):
         print("Unknown volume: %s" % name, file=sys.stderr)
         return 1
 
-    vol_path = MAESTRO_ROOT / vol["path"]
+    vol_path = _vol_path(vol)
     if not vol_path.exists():
         print("Volume path not found: %s" % vol_path, file=sys.stderr)
         return 1
@@ -217,7 +265,10 @@ def cmd_up(name):
 
     vaults = _discover_vaults(vol)
     vault_names = [v.name for v in vaults]
-    print("Activated: %s (%s)" % (name, ", ".join(vault_names) if vault_names else "no vaults"))
+    label = vol.get("label", name)
+    print("Activated: %s (%s)" % (label, ", ".join(vault_names) if vault_names else "no vaults"))
+    if vol.get("physical"):
+        print("  Physical chip at %s" % vol_path)
     print("  Jeff routes dynamically -- no restart needed.")
     return 0
 
