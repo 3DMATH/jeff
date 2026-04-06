@@ -214,12 +214,11 @@ def cmd_up(name):
 
     active.append(name)
     save_active(active)
-    regen_mcp_json()
 
     vaults = _discover_vaults(vol)
     vault_names = [v.name for v in vaults]
     print("Activated: %s (%s)" % (name, ", ".join(vault_names) if vault_names else "no vaults"))
-    print("  Restart Claude Code to pick up MCP changes.")
+    print("  Jeff routes dynamically -- no restart needed.")
     return 0
 
 
@@ -232,10 +231,9 @@ def cmd_down(name):
 
     active.remove(name)
     save_active(active)
-    regen_mcp_json()
 
     print("Deactivated: %s" % name)
-    print("  Restart Claude Code to pick up MCP changes.")
+    print("  Jeff routes dynamically -- no restart needed.")
     return 0
 
 

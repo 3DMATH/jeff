@@ -321,6 +321,420 @@ def chip_search(query: str, top_k: int = 5):
 
 
 # ============================================================
+# BACKUP (host-side, manages content file backups)
+# ============================================================
+
+MAESTRO_ROOT = os.path.dirname(os.path.dirname(JEFF_DIR))
+
+sys.path.insert(0, JEFF_DIR)
+import backup as _backup
+
+
+def _resolve_chip(chip_name):
+    """Resolve chip name to staging directory path."""
+    chip_dir = os.path.join(MAESTRO_ROOT, "chip-%s" % chip_name.lower())
+    if os.path.isdir(chip_dir):
+        return chip_dir
+    # Try active chip
+    state = _active_state()
+    if state and state.get("label", "").lower() == chip_name.lower():
+        return state["volume_path"]
+    return None
+
+
+@mcp.tool()
+def chip_backup(chip_name: str):
+    """Back up a chip's content files to the blob store.
+
+    Hashes all files in HOT/ and COLD/, stores deduplicated blobs,
+    writes a timestamped manifest. Git tracks metadata; this tracks content.
+
+    Args:
+        chip_name: Chip color (yellow, red, blue) or label.
+    """
+    chip_dir = _resolve_chip(chip_name)
+    if not chip_dir:
+        return json.dumps({"error": "Chip not found: %s" % chip_name})
+
+    _notify_stream("backup", "backing up %s" % chip_name)
+    result = _backup.backup(chip_name.lower(), chip_dir)
+    _notify_stream("backup_done", result.get("message", "backup complete"))
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def chip_backup_status(chip_name: str):
+    """Show backup history and state for a chip.
+
+    Args:
+        chip_name: Chip color (yellow, red, blue) or label.
+    """
+    return json.dumps(_backup.status(chip_name.lower()), indent=2)
+
+
+@mcp.tool()
+def chip_backup_rotate(chip_name: str, max_backups: int = 5):
+    """Rotate old backups, keeping only the N most recent.
+
+    Blobs are shared and never deleted during rotation -- only manifests
+    are pruned. This is safe even with cross-chip deduplication.
+
+    Args:
+        chip_name: Chip color (yellow, red, blue) or label.
+        max_backups: Maximum number of backup manifests to retain (default 5).
+    """
+    result = _backup.rotate(chip_name.lower(), max_backups)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def chip_backup_list(chip_name: str, manifest: str = ""):
+    """List files in a backup manifest.
+
+    Shows each file, its hash, and whether the blob is available.
+    Defaults to the latest backup if no manifest specified.
+
+    Args:
+        chip_name: Chip color (yellow, red, blue) or label.
+        manifest: Specific manifest filename (default: latest).
+    """
+    result = _backup.restore_list(chip_name.lower(), manifest or None)
+    return json.dumps(result, indent=2)
+
+
+# ============================================================
+# DYNAMIC VAULT ROUTING
+# ============================================================
+
+import sqlite3
+
+VOLUMES_ACTIVE_FILE = os.path.join(JEFF_DIR, ".jeff-volumes-active.json")
+VOLUMES_FILE = os.path.join(JEFF_DIR, "volumes.json")
+
+
+def _load_active_volumes():
+    """Load active volume names."""
+    if not os.path.isfile(VOLUMES_ACTIVE_FILE):
+        return []
+    with open(VOLUMES_ACTIVE_FILE) as f:
+        return json.load(f)
+
+
+def _load_registry():
+    """Load volume registry."""
+    if not os.path.isfile(VOLUMES_FILE):
+        return []
+    with open(VOLUMES_FILE) as f:
+        return json.load(f)
+
+
+def _discover_active_vaults():
+    """Discover all vaults across active volumes. Returns list of vault dicts."""
+    active = set(_load_active_volumes())
+    registry = _load_registry()
+    vaults = []
+
+    for vol in registry:
+        if vol["name"] not in active:
+            continue
+        vol_path = os.path.join(MAESTRO_ROOT, vol["path"])
+        if not os.path.isdir(vol_path):
+            continue
+
+        if vol["type"] == "local":
+            # Local volume IS a vault
+            db = os.path.join(vol_path, "vault.db")
+            vaults.append({
+                "vault": vol["name"],
+                "volume": vol["name"],
+                "type": "local",
+                "path": vol_path,
+                "db": db if os.path.isfile(db) else None,
+                "env": vol.get("env", {}),
+            })
+        else:
+            # Chip -- discover vault-* subdirs
+            for d in sorted(os.listdir(vol_path)):
+                vault_dir = os.path.join(vol_path, d)
+                if not os.path.isdir(vault_dir) or not d.startswith("vault-"):
+                    continue
+                db = os.path.join(vault_dir, "vault.db")
+                vault_name = d.replace("vault-", "")
+                vaults.append({
+                    "vault": vault_name,
+                    "volume": vol["name"],
+                    "type": "chip",
+                    "path": vault_dir,
+                    "db": db if os.path.isfile(db) else None,
+                })
+
+    return vaults
+
+
+def _find_vault(vault_name):
+    """Find a specific vault by name across active volumes."""
+    for v in _discover_active_vaults():
+        if v["vault"] == vault_name:
+            return v
+    return None
+
+
+def _vault_db_query(vault, query, params=()):
+    """Run a query against a vault's database."""
+    if not vault.get("db"):
+        return []
+    try:
+        conn = sqlite3.connect(vault["db"])
+        conn.row_factory = sqlite3.Row
+        rows = [dict(r) for r in conn.execute(query, params).fetchall()]
+        conn.close()
+        return rows
+    except sqlite3.OperationalError:
+        return []
+
+
+def _vault_db_execute(vault, query, params=()):
+    """Execute a write query against a vault's database."""
+    if not vault.get("db"):
+        return {"error": "no database"}
+    try:
+        conn = sqlite3.connect(vault["db"])
+        cur = conn.execute(query, params)
+        conn.commit()
+        result = {"rows_affected": cur.rowcount, "lastrowid": cur.lastrowid}
+        conn.close()
+        return result
+    except sqlite3.OperationalError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def chip_discover():
+    """Discover all active vaults across all activated volumes.
+
+    Call this first to see what vaults are available. Each vault
+    can be queried via vault_query(vault=name, operation=...).
+    """
+    vaults = _discover_active_vaults()
+    result = []
+    for v in vaults:
+        info = {
+            "vault": v["vault"],
+            "volume": v["volume"],
+            "type": v["type"],
+        }
+        if v.get("db"):
+            try:
+                conn = sqlite3.connect(v["db"])
+                entries = conn.execute("SELECT COUNT(DISTINCT slug) FROM vault_images").fetchone()[0]
+                images = conn.execute("SELECT COUNT(*) FROM vault_images").fetchone()[0]
+                conn.close()
+                info["entries"] = entries
+                info["images"] = images
+            except Exception:
+                info["entries"] = 0
+                info["images"] = 0
+        else:
+            info["entries"] = 0
+            info["images"] = 0
+
+        # Check for cue-sheet
+        info["has_cuesheet"] = os.path.isfile(os.path.join(v["path"], "cue-sheet.yaml"))
+        result.append(info)
+
+    return json.dumps({
+        "active_volumes": sorted(set(v["volume"] for v in vaults)),
+        "vaults": result,
+        "operations": [
+            "status", "search", "get", "list_images",
+            "search_images", "filter",
+            "gallery", "list_galleries", "get_gallery",
+            "annotate", "get_annotations",
+            "ingest",
+        ],
+    }, indent=2)
+
+
+@mcp.tool()
+def vault_query(vault: str, operation: str, slug: str = "", query: str = "",
+                filename: str = "", body: str = "", title: str = "",
+                slugs: str = "", tag: str = "", era: str = "",
+                limit: int = 50):
+    """Query any active vault dynamically. Call chip_discover first to see available vaults.
+
+    Args:
+        vault: Vault name (e.g. "hot", "cold", "rose", "finbot", "geo")
+        operation: One of: status, search, get, list_images, search_images,
+                   filter, gallery, list_galleries, get_gallery,
+                   annotate, get_annotations, ingest
+        slug: Entry slug (for get, annotate, get_annotations, gallery)
+        query: Search query string (for search, search_images, gallery)
+        filename: Filename (for annotate, get_annotations)
+        body: Annotation body (for annotate)
+        title: Gallery title (for gallery create)
+        slugs: Comma-separated slugs (for gallery create)
+        tag: Tag filter (for filter)
+        era: Era filter (for filter)
+        limit: Result limit (default 50)
+    """
+    v = _find_vault(vault)
+    if not v:
+        available = [x["vault"] for x in _discover_active_vaults()]
+        return json.dumps({
+            "error": "Vault '%s' not found or not active" % vault,
+            "available_vaults": available,
+        })
+
+    from datetime import datetime, timezone
+    utc_now = datetime.now(timezone.utc).isoformat()
+
+    if operation == "status":
+        entries = 0
+        images = 0
+        if v.get("db"):
+            try:
+                conn = sqlite3.connect(v["db"])
+                entries = conn.execute("SELECT COUNT(DISTINCT slug) FROM vault_images").fetchone()[0]
+                images = conn.execute("SELECT COUNT(*) FROM vault_images").fetchone()[0]
+                conn.close()
+            except Exception:
+                pass
+        return json.dumps({
+            "vault": vault,
+            "volume": v["volume"],
+            "type": v["type"],
+            "entries": entries,
+            "images": images,
+        })
+
+    elif operation == "search":
+        pattern = "%%%s%%" % (query or "")
+        rows = _vault_db_query(v,
+            "SELECT DISTINCT slug FROM vault_images WHERE slug LIKE ? ORDER BY slug LIMIT ?",
+            (pattern, int(limit)))
+        return json.dumps(rows)
+
+    elif operation == "get":
+        if not slug:
+            return json.dumps({"error": "slug required for get"})
+        rows = _vault_db_query(v,
+            "SELECT slug, filename, port FROM vault_images WHERE slug = ? ORDER BY filename",
+            (slug,))
+        return json.dumps(rows)
+
+    elif operation == "list_images":
+        rows = _vault_db_query(v,
+            "SELECT slug, filename, port FROM vault_images ORDER BY slug, filename LIMIT ?",
+            (int(limit),))
+        return json.dumps(rows)
+
+    elif operation == "search_images":
+        pattern = "%%%s%%" % (query or "")
+        rows = _vault_db_query(v,
+            "SELECT slug, filename, port FROM vault_images "
+            "WHERE slug LIKE ? OR filename LIKE ? ORDER BY slug, filename LIMIT ?",
+            (pattern, pattern, int(limit)))
+        return json.dumps(rows)
+
+    elif operation == "filter":
+        rows = _vault_db_query(v,
+            "SELECT DISTINCT slug FROM vault_images ORDER BY slug LIMIT ?",
+            (int(limit),))
+        return json.dumps(rows)
+
+    elif operation == "list_galleries":
+        rows = _vault_db_query(v,
+            "SELECT slug, title, created_at FROM galleries ORDER BY created_at DESC LIMIT ?",
+            (int(limit),))
+        return json.dumps(rows)
+
+    elif operation == "get_gallery":
+        if not slug:
+            return json.dumps({"error": "slug required for get_gallery"})
+        rows = _vault_db_query(v,
+            "SELECT slug, title, images, created_at FROM galleries WHERE slug = ? LIMIT 1",
+            (slug,))
+        if not rows:
+            return json.dumps({})
+        gallery = rows[0]
+        raw = gallery.get("images")
+        if isinstance(raw, str):
+            try:
+                gallery["images"] = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                gallery["images"] = []
+        return json.dumps(gallery)
+
+    elif operation == "gallery":
+        if not title:
+            return json.dumps({"error": "title required to create a gallery"})
+        gal_slug = "gallery-%d" % int(datetime.now(timezone.utc).timestamp())
+        images = []
+        if slugs:
+            for s in slugs.split(","):
+                s = s.strip()
+                imgs = _vault_db_query(v,
+                    "SELECT slug, filename, port FROM vault_images WHERE slug = ? ORDER BY filename",
+                    (s,))
+                images.extend(imgs)
+        elif query:
+            pattern = "%%%s%%" % query
+            images = _vault_db_query(v,
+                "SELECT slug, filename, port FROM vault_images "
+                "WHERE slug LIKE ? OR filename LIKE ? ORDER BY slug, filename LIMIT 50",
+                (pattern, pattern))
+        result = _vault_db_execute(v,
+            "INSERT OR REPLACE INTO galleries (slug, title, images, created_at) VALUES (?, ?, ?, ?)",
+            (gal_slug, title, json.dumps(images), utc_now))
+        return json.dumps({"slug": gal_slug, "title": title, "images": images, "created_at": utc_now})
+
+    elif operation == "annotate":
+        if not slug or not filename or not body:
+            return json.dumps({"error": "slug, filename, and body required for annotate"})
+        result = _vault_db_execute(v,
+            "INSERT INTO vault_annotations (slug, filename, content, source, created_at) "
+            "VALUES (?, ?, ?, 'mcp', ?)",
+            (slug, filename, body, utc_now))
+        return json.dumps({"slug": slug, "filename": filename, "body": body, "id": result.get("lastrowid")})
+
+    elif operation == "get_annotations":
+        q = "SELECT id, slug, filename, content as body, pinned FROM vault_annotations"
+        params = []
+        filters = []
+        if slug:
+            filters.append("slug = ?")
+            params.append(slug)
+        if filename:
+            filters.append("filename = ?")
+            params.append(filename)
+        if filters:
+            q += " WHERE " + " AND ".join(filters)
+        q += " ORDER BY id DESC"
+        rows = _vault_db_query(v, q, tuple(params))
+        return json.dumps(rows)
+
+    elif operation == "ingest":
+        # Only for local vaults with ingest.py
+        ingest_script = os.path.join(v["path"], "app", "ingest.py")
+        if not os.path.isfile(ingest_script):
+            return json.dumps({"error": "No ingest script for vault %s" % vault})
+        import subprocess
+        cmd = [sys.executable, ingest_script]
+        if slug:
+            cmd.append(slug)
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=v["path"])
+        return json.dumps({"status": "ok" if result.returncode == 0 else "error",
+                          "output": result.stdout.strip(),
+                          "error": result.stderr.strip() if result.returncode != 0 else ""})
+
+    else:
+        return json.dumps({"error": "Unknown operation: %s" % operation,
+                          "valid": ["status", "search", "get", "list_images", "search_images",
+                                   "filter", "gallery", "list_galleries", "get_gallery",
+                                   "annotate", "get_annotations", "ingest"]})
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
