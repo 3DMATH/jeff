@@ -456,6 +456,37 @@ def _load_registry():
     return registry
 
 
+def _chip_vault_mount_path(vol_path):
+    """Return the mounted sparseimage path for a chip, or None."""
+    # Check .chip-mount.json
+    state_file = os.path.join(MAESTRO_ROOT, ".chip-mount.json")
+    if os.path.isfile(state_file):
+        try:
+            with open(state_file) as f:
+                state = json.load(f)
+            if state.get("volume_path") == vol_path and state.get("vault_mount"):
+                if os.path.isdir(state["vault_mount"]):
+                    return state["vault_mount"]
+        except Exception:
+            pass
+
+    # Fallback: check heartbeat for vault_volume_name
+    hb_path = os.path.join(vol_path, "heartbeat.json")
+    if os.path.isfile(hb_path):
+        try:
+            with open(hb_path) as f:
+                hb = json.load(f)
+            vol_name = hb.get("vault_volume_name", "")
+            if vol_name:
+                mount = os.path.join("/Volumes", vol_name)
+                if os.path.isdir(mount):
+                    return mount
+        except Exception:
+            pass
+
+    return None
+
+
 def _discover_active_vaults():
     """Discover all vaults across active volumes. Returns list of vault dicts."""
     active = set(_load_active_volumes())
@@ -482,8 +513,20 @@ def _discover_active_vaults():
             })
         else:
             # Chip -- discover vault-* subdirs
-            for d in sorted(os.listdir(vol_path)):
-                vault_dir = os.path.join(vol_path, d)
+            # Check card surface first, then mounted sparseimage
+            scan_path = vol_path
+            surface_vaults = [d for d in os.listdir(vol_path)
+                             if os.path.isdir(os.path.join(vol_path, d))
+                             and d.startswith("vault-")]
+
+            if not surface_vaults:
+                # No vaults on surface -- check mounted sparseimage
+                mount_path = _chip_vault_mount_path(vol_path)
+                if mount_path:
+                    scan_path = mount_path
+
+            for d in sorted(os.listdir(scan_path)):
+                vault_dir = os.path.join(scan_path, d)
                 if not os.path.isdir(vault_dir) or not d.startswith("vault-"):
                     continue
                 db = os.path.join(vault_dir, "vault.db")
@@ -495,6 +538,28 @@ def _discover_active_vaults():
                     "path": vault_dir,
                     "db": db if os.path.isfile(db) else None,
                 })
+
+            # If still no vaults found, use heartbeat manifest for metadata
+            if not any(v["volume"] == vol["name"] for v in vaults):
+                hb_path = os.path.join(vol_path, "heartbeat.json")
+                if os.path.isfile(hb_path):
+                    try:
+                        with open(hb_path) as f:
+                            hb = json.load(f)
+                        for hb_vault in hb.get("vaults", []):
+                            vault_name = hb_vault.get("name", "")
+                            if vault_name:
+                                vaults.append({
+                                    "vault": vault_name,
+                                    "volume": vol["name"],
+                                    "type": "chip",
+                                    "path": "",
+                                    "db": None,
+                                    "sealed": True,
+                                    "has_cuesheet": bool(hb_vault.get("cuesheet")),
+                                })
+                    except Exception:
+                        pass
 
     return vaults
 
@@ -567,7 +632,11 @@ def chip_discover():
             info["images"] = 0
 
         # Check for cue-sheet
-        info["has_cuesheet"] = os.path.isfile(os.path.join(v["path"], "cue-sheet.yaml"))
+        if v.get("sealed"):
+            info["has_cuesheet"] = v.get("has_cuesheet", False)
+            info["sealed"] = True
+        else:
+            info["has_cuesheet"] = os.path.isfile(os.path.join(v["path"], "cue-sheet.yaml"))
         result.append(info)
 
     return json.dumps({

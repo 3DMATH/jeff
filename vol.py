@@ -43,6 +43,7 @@ STATIC_MCP = {
 
 
 VOLUMES_SCAN_DIR = Path("/Volumes")
+CHIP_MOUNT_STATE = MAESTRO_ROOT / ".chip-mount.json"
 
 
 def load_registry():
@@ -141,6 +142,55 @@ def _vol_path(vol):
     return MAESTRO_ROOT / p
 
 
+def _chip_vault_mount(vol):
+    """Return the mounted sparseimage path for a chip, or None."""
+    vol_path = _vol_path(vol)
+    if not vol.get("physical"):
+        return None
+
+    # Check .chip-mount.json for an active vault mount matching this volume
+    if CHIP_MOUNT_STATE.is_file():
+        try:
+            with open(CHIP_MOUNT_STATE) as f:
+                state = json.load(f)
+            if state.get("volume_path") == str(vol_path) and state.get("vault_mount"):
+                mount_path = Path(state["vault_mount"])
+                if mount_path.is_dir():
+                    return mount_path
+        except Exception:
+            pass
+
+    # Fallback: check heartbeat for vault_volume_name and see if it is mounted
+    hb = vol_path / "heartbeat.json"
+    if hb.is_file():
+        try:
+            with open(hb) as f:
+                chip = json.load(f)
+            vol_name = chip.get("vault_volume_name", "")
+            if vol_name:
+                mount_path = VOLUMES_SCAN_DIR / vol_name
+                if mount_path.is_dir():
+                    return mount_path
+        except Exception:
+            pass
+
+    return None
+
+
+def _heartbeat_vaults(vol):
+    """Read vault manifest from heartbeat.json (no mount needed)."""
+    vol_path = _vol_path(vol)
+    hb = vol_path / "heartbeat.json"
+    if not hb.is_file():
+        return []
+    try:
+        with open(hb) as f:
+            chip = json.load(f)
+        return chip.get("vaults", [])
+    except Exception:
+        return []
+
+
 def _discover_vaults(vol):
     """Discover vault directories for a volume."""
     vol_path = _vol_path(vol)
@@ -150,10 +200,21 @@ def _discover_vaults(vol):
     if vol["type"] == "local":
         # Local volume IS a vault
         return [vol_path]
-    else:
-        # Chip contains vault-* subdirectories
-        return sorted([d for d in vol_path.iterdir()
+
+    # Chip: check for vault-* on card surface first (legacy/unencrypted layout)
+    surface_vaults = sorted([d for d in vol_path.iterdir()
+                            if d.is_dir() and d.name.startswith("vault-")])
+    if surface_vaults:
+        return surface_vaults
+
+    # No vaults on surface -- check mounted sparseimage
+    mount_path = _chip_vault_mount(vol)
+    if mount_path:
+        return sorted([d for d in mount_path.iterdir()
                       if d.is_dir() and d.name.startswith("vault-")])
+
+    # Not mounted -- return empty (heartbeat manifest used elsewhere for metadata)
+    return []
 
 
 def _mcp_entries_for_volume(vol):
@@ -233,6 +294,13 @@ def cmd_list():
             detail = "%d entries, %s" % (entries, size)
         elif vol["type"] == "chip" and vaults:
             detail = "%d vaults" % len(vaults)
+        elif vol["type"] == "chip" and not vaults and exists:
+            # No vaults on surface or mounted -- check heartbeat manifest
+            hb_vaults = _heartbeat_vaults(vol)
+            if hb_vaults:
+                detail = "%d vaults (sealed)" % len(hb_vaults)
+            else:
+                detail = "empty"
         elif not exists:
             detail = "not found"
         else:

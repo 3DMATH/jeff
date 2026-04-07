@@ -846,6 +846,78 @@ cmd_unmount() {
     device_id=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('device_id',''))" 2>/dev/null)
     model=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('model',''))" 2>/dev/null)
 
+    # Propagate vault manifest to heartbeat (read-write only)
+    local current_mode
+    current_mode=$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('mode',''))" 2>/dev/null || echo "")
+    if [[ "${current_mode}" == "read-write" ]]; then
+        python3 - "${volume_path}" "${vault_mount}" << 'PYEOF'
+import json, os, sys
+
+vol_path, vault_mount = sys.argv[1:3]
+hb_path = os.path.join(vol_path, "heartbeat.json")
+
+if not os.path.isfile(hb_path):
+    sys.exit(0)
+
+with open(hb_path) as f:
+    hb = json.load(f)
+
+# Scan mounted volume for vault-* directories
+manifest = []
+for d in sorted(os.listdir(vault_mount)):
+    vdir = os.path.join(vault_mount, d)
+    if not os.path.isdir(vdir) or not d.startswith("vault-"):
+        continue
+    vault_name = d.replace("vault-", "")
+    entry = {"name": vault_name}
+
+    # Read cue-sheet title if present
+    cs_path = os.path.join(vdir, "cue-sheet.yaml")
+    if os.path.isfile(cs_path):
+        try:
+            with open(cs_path) as f:
+                for line in f:
+                    if line.strip().startswith("name:"):
+                        entry["cuesheet"] = line.split(":", 1)[1].strip().strip('"').strip("'")
+                        break
+        except Exception:
+            pass
+
+    # Read description from config.yaml if present
+    cfg_path = os.path.join(vdir, "config.yaml")
+    if os.path.isfile(cfg_path):
+        try:
+            with open(cfg_path) as f:
+                for line in f:
+                    if line.strip().startswith("name:"):
+                        continue
+                    if line.strip().startswith("description:"):
+                        desc = line.split(":", 1)[1].strip().strip('"').strip("'")
+                        if desc:
+                            entry["description"] = desc
+                        break
+        except Exception:
+            pass
+
+    manifest.append(entry)
+
+if manifest:
+    hb["vaults"] = manifest
+
+    # Recompute identity hash
+    hb["identity_hash"] = ""
+    canonical = json.dumps(hb, sort_keys=True, separators=(",", ":"))
+    import hashlib
+    hb["identity_hash"] = hashlib.sha256(canonical.encode()).hexdigest()
+
+    with open(hb_path, "w") as f:
+        json.dump(hb, f, indent=2)
+        f.write("\n")
+
+    print("  Heartbeat manifest updated: %d vaults" % len(manifest))
+PYEOF
+    fi
+
     # Detach vault
     sync
     hdiutil detach "${vault_mount}" -quiet 2>/dev/null || {
