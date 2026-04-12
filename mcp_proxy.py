@@ -93,31 +93,44 @@ def _require_chip():
 @mcp.tool()
 def chip_status():
     """Chip identity, mode, and capabilities."""
-    state, err = _require_chip()
-    if err:
-        return json.dumps({"error": err})
+    state = _active_state()
 
-    volume = state["volume_path"]
-    hb_path = os.path.join(volume, "heartbeat.json")
-    hb = {}
-    if os.path.isfile(hb_path):
-        with open(hb_path) as f:
-            hb = json.load(f)
-
-    chain = hb.get("tool_chain", {})
-    root = chain.get("root", "#000000")
+    # Active volumes (always available, even without a chip inserted)
+    vaults = _discover_active_vaults()
+    active_volumes = sorted(set(v["volume"] for v in vaults))
+    vault_count = len(vaults)
 
     result = {
-        "label": state.get("label", "?"),
-        "device_id": state.get("device_id", "?"),
-        "mode": state.get("mode", "?"),
-        "root_color": root,
-        "band": spectral.resolve(root).get("band", "?") if root != "#000000" else "unknown",
-        "model": state.get("model", ""),
-        "volume": volume,
-        "vault_mounted": bool(state.get("vault_mount")),
-        "mount_count": hb.get("mount_count", 0),
+        "active_volumes": active_volumes,
+        "vault_count": vault_count,
     }
+
+    if state:
+        # A removable chip is inserted and active
+        volume = state["volume_path"]
+        hb_path = os.path.join(volume, "heartbeat.json")
+        hb = {}
+        if os.path.isfile(hb_path):
+            with open(hb_path) as f:
+                hb = json.load(f)
+
+        chain = hb.get("tool_chain", {})
+        root = chain.get("root", "#000000")
+
+        result["chip"] = {
+            "label": state.get("label", "?"),
+            "device_id": state.get("device_id", "?"),
+            "mode": state.get("mode", "?"),
+            "root_color": root,
+            "band": spectral.resolve(root).get("band", "?") if root != "#000000" else "unknown",
+            "model": state.get("model", ""),
+            "volume": volume,
+            "vault_mounted": bool(state.get("vault_mount")),
+            "mount_count": hb.get("mount_count", 0),
+        }
+    else:
+        result["chip"] = None
+
     _notify_stream("status", "status checked", result)
     return json.dumps(result, indent=2)
 
