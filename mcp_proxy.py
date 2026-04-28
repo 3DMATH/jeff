@@ -7,6 +7,7 @@ and routes to it dynamically. Swap chips without restarting.
 
 import json
 import os
+import sqlite3
 import sys
 import threading
 
@@ -20,6 +21,224 @@ from mcp.server.fastmcp import FastMCP
 import spectral
 
 mcp = FastMCP("jeff")
+
+
+# ============================================================
+# RESILIENCE LAYER
+# ============================================================
+
+class VolumeGoneError(Exception):
+    """Raised when a volume/chip path is no longer reachable."""
+    pass
+
+
+def _safe_read(path):
+    """Read a file, raising VolumeGoneError if the volume vanished."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        raise VolumeGoneError("Path not found: %s" % path)
+    except PermissionError:
+        raise VolumeGoneError("Permission denied: %s" % path)
+    except OSError as exc:
+        raise VolumeGoneError("I/O error on %s: %s" % (path, exc))
+
+
+def _safe_json(path):
+    """Read and parse a JSON file, raising VolumeGoneError if unreachable."""
+    raw = _safe_read(path)
+    return json.loads(raw)
+
+
+def _safe_listdir(path):
+    """List a directory, raising VolumeGoneError if gone."""
+    try:
+        return sorted(os.listdir(path))
+    except FileNotFoundError:
+        raise VolumeGoneError("Directory not found: %s" % path)
+    except PermissionError:
+        raise VolumeGoneError("Permission denied: %s" % path)
+    except OSError as exc:
+        raise VolumeGoneError("I/O error on %s: %s" % (path, exc))
+
+
+def _safe_db_query(db_path, query, params=()):
+    """Run a read query against a sqlite db. Returns (rows, error).
+
+    On success: (list_of_dicts, None)
+    On failure: ([], error_string)
+    """
+    if not db_path or not os.path.isfile(db_path):
+        return [], "Database not found: %s" % db_path
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = [dict(r) for r in conn.execute(query, params).fetchall()]
+        conn.close()
+        return rows, None
+    except sqlite3.OperationalError as exc:
+        return [], "Database error: %s" % exc
+    except OSError as exc:
+        return [], "Volume gone during query: %s" % exc
+
+
+def _safe_db_execute(db_path, query, params=()):
+    """Run a write query against a sqlite db. Returns result dict."""
+    if not db_path or not os.path.isfile(db_path):
+        return {"error": "Database not found: %s" % db_path}
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.execute(query, params)
+        conn.commit()
+        result = {"rows_affected": cur.rowcount, "lastrowid": cur.lastrowid}
+        conn.close()
+        return result
+    except sqlite3.OperationalError as exc:
+        return {"error": "Database error: %s" % exc}
+    except OSError as exc:
+        return {"error": "Volume gone during write: %s" % exc}
+
+
+def _volume_alive(path):
+    """Quick liveness check -- can we stat the path?"""
+    try:
+        os.stat(path)
+        return True
+    except (FileNotFoundError, PermissionError, OSError):
+        return False
+
+
+def _scan_chip_surface(vol_path):
+    """Scan a chip's full surface and return a structured manifest.
+
+    Reports everything on the chip -- not just vaults. Datasets, MCP service,
+    models, schemas, docs, sparseimage -- the whole picture.
+    """
+    surface = {
+        "path": vol_path,
+        "alive": _volume_alive(vol_path),
+        "vaults": [],
+        "datasets": [],
+        "models": [],
+        "docs": [],
+        "schemas": [],
+        "has_mcp": False,
+        "has_heartbeat": False,
+        "has_sparseimage": False,
+        "sparseimage_mb": 0,
+        "model_name": None,
+        "label": None,
+        "device_id": None,
+    }
+
+    if not surface["alive"]:
+        return surface
+
+    try:
+        entries = _safe_listdir(vol_path)
+    except VolumeGoneError:
+        surface["alive"] = False
+        return surface
+
+    # Heartbeat
+    hb_path = os.path.join(vol_path, "heartbeat.json")
+    if os.path.isfile(hb_path):
+        surface["has_heartbeat"] = True
+        try:
+            hb = _safe_json(hb_path)
+            surface["label"] = hb.get("label")
+            surface["device_id"] = hb.get("device_id")
+            surface["model_name"] = hb.get("model")
+        except VolumeGoneError:
+            pass
+
+    # MCP service
+    mcp_dir = os.path.join(vol_path, "mcp")
+    if os.path.isdir(mcp_dir):
+        surface["has_mcp"] = True
+
+    # Datasets
+    ds_dir = os.path.join(vol_path, "datasets")
+    if os.path.isdir(ds_dir):
+        try:
+            for f in _safe_listdir(ds_dir):
+                if f.endswith(".json") or f.endswith(".md"):
+                    surface["datasets"].append(f)
+        except VolumeGoneError:
+            pass
+
+    # Models
+    models_dir = os.path.join(vol_path, "models")
+    if os.path.isdir(models_dir):
+        try:
+            for f in _safe_listdir(models_dir):
+                full = os.path.join(models_dir, f)
+                if os.path.isfile(full):
+                    size_mb = os.path.getsize(full) / (1024 * 1024)
+                    surface["models"].append({"name": f, "size_mb": round(size_mb, 1)})
+        except VolumeGoneError:
+            pass
+
+    # Docs
+    jeff_docs = os.path.join(vol_path, ".jeff", "docs")
+    if os.path.isdir(jeff_docs):
+        try:
+            for f in _safe_listdir(jeff_docs):
+                if f.endswith(".md"):
+                    surface["docs"].append(f)
+        except VolumeGoneError:
+            pass
+
+    # Schemas
+    for f in entries:
+        if f.endswith(".sql"):
+            surface["schemas"].append(f)
+
+    # Sparseimage
+    si_path = os.path.join(vol_path, "vault.sparseimage")
+    if os.path.isfile(si_path):
+        surface["has_sparseimage"] = True
+        try:
+            surface["sparseimage_mb"] = round(os.path.getsize(si_path) / (1024 * 1024), 1)
+        except OSError:
+            pass
+
+    # Vaults (vault-* dirs)
+    for f in entries:
+        vault_dir = os.path.join(vol_path, f)
+        if os.path.isdir(vault_dir) and f.startswith("vault-"):
+            vault_name = f.replace("vault-", "")
+            db = os.path.join(vault_dir, "vault.db")
+            has_db = os.path.isfile(db)
+            has_cuesheet = os.path.isfile(os.path.join(vault_dir, "cue-sheet.yaml"))
+            surface["vaults"].append({
+                "name": vault_name,
+                "has_db": has_db,
+                "has_cuesheet": has_cuesheet,
+            })
+
+    # Search index
+    idx = os.path.join(vol_path, ".jeff", "index", "search.json")
+    surface["has_search_index"] = os.path.isfile(idx)
+
+    return surface
+
+
+def _auto_deactivate(vol_name):
+    """Remove a volume from the active list when it vanishes."""
+    if not os.path.isfile(VOLUMES_ACTIVE_FILE):
+        return
+    try:
+        with open(VOLUMES_ACTIVE_FILE) as f:
+            active = json.load(f)
+        if vol_name in active:
+            active.remove(vol_name)
+            with open(VOLUMES_ACTIVE_FILE, "w") as f:
+                json.dump(sorted(set(active)), f, indent=2)
+                f.write("\n")
+    except Exception:
+        pass
 
 # cue-vox stream notification (fire-and-forget)
 CUE_VOX_PORT = os.environ.get("CUE_VOX_PORT", "3000")
@@ -110,12 +329,17 @@ def chip_status():
         volume = state["volume_path"]
         hb_path = os.path.join(volume, "heartbeat.json")
         hb = {}
-        if os.path.isfile(hb_path):
-            with open(hb_path) as f:
-                hb = json.load(f)
+        try:
+            if os.path.isfile(hb_path):
+                hb = _safe_json(hb_path)
+        except VolumeGoneError:
+            result["chip"] = {"error": "Chip ejected (was %s)" % state.get("label", "?")}
+            return json.dumps(result, indent=2)
 
         chain = hb.get("tool_chain", {})
         root = chain.get("root", "#000000")
+
+        surface = _scan_chip_surface(volume)
 
         result["chip"] = {
             "label": state.get("label", "?"),
@@ -127,6 +351,17 @@ def chip_status():
             "volume": volume,
             "vault_mounted": bool(state.get("vault_mount")),
             "mount_count": hb.get("mount_count", 0),
+        }
+        result["surface"] = {
+            "datasets": surface["datasets"],
+            "models": surface["models"],
+            "docs": surface["docs"],
+            "schemas": surface["schemas"],
+            "has_mcp": surface["has_mcp"],
+            "has_sparseimage": surface["has_sparseimage"],
+            "sparseimage_mb": surface["sparseimage_mb"],
+            "has_search_index": surface["has_search_index"],
+            "vaults_on_surface": surface["vaults"],
         }
     else:
         result["chip"] = None
@@ -150,41 +385,41 @@ def chip_read_card(filename: str = ""):
 
     volume = state["volume_path"]
 
-    if not filename:
-        files = []
-        for f in sorted(os.listdir(volume)):
-            if f.startswith(".") and f != ".jeff":
-                continue
-            full = os.path.join(volume, f)
-            if os.path.isfile(full):
-                files.append({"name": f, "size_bytes": os.path.getsize(full)})
-            elif os.path.isdir(full):
-                files.append({"name": f + "/", "type": "directory"})
-        return json.dumps({"volume": volume, "files": files}, indent=2)
-
-    requested = os.path.normpath(os.path.join(volume, filename))
-    if not requested.startswith(volume):
-        return json.dumps({"error": "Path traversal denied"})
-
-    if os.path.isdir(requested):
-        entries = []
-        for f in sorted(os.listdir(requested)):
-            full = os.path.join(requested, f)
-            if os.path.isfile(full):
-                entries.append({"name": f, "size_bytes": os.path.getsize(full)})
-            elif os.path.isdir(full):
-                entries.append({"name": f + "/", "type": "directory"})
-        return json.dumps({"path": filename, "files": entries}, indent=2)
-
-    if not os.path.isfile(requested):
-        return json.dumps({"error": "File not found: %s" % filename})
-
     try:
-        with open(requested, "r", encoding="utf-8") as f:
-            content = f.read()
+        if not filename:
+            files = []
+            for f in _safe_listdir(volume):
+                if f.startswith(".") and f != ".jeff":
+                    continue
+                full = os.path.join(volume, f)
+                if os.path.isfile(full):
+                    files.append({"name": f, "size_bytes": os.path.getsize(full)})
+                elif os.path.isdir(full):
+                    files.append({"name": f + "/", "type": "directory"})
+            return json.dumps({"volume": volume, "files": files}, indent=2)
+
+        requested = os.path.normpath(os.path.join(volume, filename))
+        if not requested.startswith(volume):
+            return json.dumps({"error": "Path traversal denied"})
+
+        if os.path.isdir(requested):
+            entries = []
+            for f in _safe_listdir(requested):
+                full = os.path.join(requested, f)
+                if os.path.isfile(full):
+                    entries.append({"name": f, "size_bytes": os.path.getsize(full)})
+                elif os.path.isdir(full):
+                    entries.append({"name": f + "/", "type": "directory"})
+            return json.dumps({"path": filename, "files": entries}, indent=2)
+
+        if not os.path.isfile(requested):
+            return json.dumps({"error": "File not found: %s" % filename})
+
+        content = _safe_read(requested)
         return json.dumps({"file": filename, "content": content}, indent=2)
-    except UnicodeDecodeError:
-        return json.dumps({"file": filename, "error": "Binary file", "size_bytes": os.path.getsize(requested)})
+
+    except VolumeGoneError as exc:
+        return json.dumps({"error": str(exc), "hint": "Chip may have been ejected"})
 
 
 @mcp.tool()
@@ -278,6 +513,9 @@ def chip_query(prompt: str, system: str = "", max_tokens: int = 2048):
     _notify_stream("query", "query: \"%s\"" % truncated)
 
     volume = state["volume_path"]
+    if not _volume_alive(volume):
+        return json.dumps({"error": "Chip ejected (was %s)" % state.get("label", "?")})
+
     mcp_dir = os.path.join(volume, "mcp")
     sys.path.insert(0, mcp_dir)
 
@@ -310,6 +548,9 @@ def chip_search(query: str, top_k: int = 5):
     _notify_stream("search", "search: \"%s\"" % truncated_q)
 
     volume = state["volume_path"]
+    if not _volume_alive(volume):
+        return json.dumps({"error": "Chip ejected (was %s)" % state.get("label", "?")})
+
     mcp_dir = os.path.join(volume, "mcp")
     index_path = os.path.join(volume, ".jeff", "index", "search.json")
 
@@ -334,33 +575,122 @@ def chip_search(query: str, top_k: int = 5):
 
 
 # ============================================================
-# BACKUP (host-side, manages content file backups)
+# SEMANTIC SEARCH (host-side, C2D2 vector layer)
 # ============================================================
 
 MAESTRO_ROOT = os.path.dirname(os.path.dirname(JEFF_DIR))
+C2D2_DIR = os.path.join(MAESTRO_ROOT, "tools", "c2d2")
+C2D2_FALLBACK_VECTORS = os.path.join(C2D2_DIR, ".vectors")
+
+
+def _resolve_sidecar(volume_path, name):
+    """Find a .vectors/ sidecar for a volume. Returns (path, location) or (None, None)."""
+    on_volume = os.path.join(volume_path, ".vectors", "%s.npz" % name)
+    if os.path.isfile(on_volume):
+        return on_volume, "volume"
+    fallback = os.path.join(C2D2_FALLBACK_VECTORS, "%s.npz" % name)
+    if os.path.isfile(fallback):
+        return fallback, "fallback"
+    return None, None
+
+
+@mcp.tool()
+def chip_search_semantic(query: str, volume: str = "", top_k: int = 5):
+    """Semantic search over a chip's unencrypted surface via the C2D2 vector layer.
+
+    Loads a per-volume .vectors/ sidecar built by:
+        python3 tools/c2d2/cli.py index-chip --volume <path>
+
+    Args:
+        query: Natural-language search query.
+        volume: Volume name ("gray", "yellow") OR absolute path.
+                If empty, uses the active chip.
+        top_k: Number of results to return (default 5).
+    """
+    # Resolve volume path
+    if volume:
+        volume_path = _resolve_chip(volume) if not volume.startswith("/") else volume
+        if not volume_path:
+            return json.dumps({"error": "Volume not found: %s" % volume})
+    else:
+        state = _active_state()
+        if state is None:
+            return json.dumps({"error": "No active chip and no volume specified"})
+        volume_path = state["volume_path"]
+
+    if not _volume_alive(volume_path):
+        return json.dumps({"error": "Volume gone: %s" % volume_path})
+
+    # Sidecar lookup
+    name = os.path.basename(os.path.normpath(volume_path)).lower()
+    sidecar, location = _resolve_sidecar(volume_path, name)
+    if not sidecar:
+        return json.dumps({
+            "error": "No sidecar for %s. Build one: python3 tools/c2d2/cli.py index-chip --volume %s"
+                     % (name, volume_path)
+        })
+
+    # Search via C2D2 vecstore
+    sys.path.insert(0, C2D2_DIR)
+    try:
+        import vecstore
+        vs = vecstore.VecStore(sidecar)
+        if not vs.load():
+            return json.dumps({"error": "Sidecar failed to load: %s" % sidecar})
+        results = vs.search(query, top_k=top_k)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+    finally:
+        if C2D2_DIR in sys.path:
+            sys.path.remove(C2D2_DIR)
+
+    return json.dumps({
+        "query": query,
+        "volume": volume_path,
+        "sidecar": sidecar,
+        "sidecar_location": location,
+        "results": results,
+    }, indent=2)
+
+
+# ============================================================
+# BACKUP (host-side, manages content file backups)
+# ============================================================
 
 sys.path.insert(0, JEFF_DIR)
 import backup as _backup
 
 
 def _resolve_chip(chip_name):
-    """Resolve chip name to staging directory path."""
+    """Resolve chip name to directory path.
+
+    Checks in order:
+      1. Staging dir in maestro (chip-blue/, chip-yellow/, etc.)
+      2. Active chip via jeff state
+      3. Physical chip at /Volumes/ by label match
+    """
+    # Staging dir
     chip_dir = os.path.join(MAESTRO_ROOT, "chip-%s" % chip_name.lower())
     if os.path.isdir(chip_dir):
         return chip_dir
-    # Try active chip
+    # Active chip
     state = _active_state()
     if state and state.get("label", "").lower() == chip_name.lower():
         return state["volume_path"]
+    # Physical chip at /Volumes/
+    candidate = os.path.join("/Volumes", chip_name.upper())
+    if os.path.isdir(candidate) and os.path.isfile(os.path.join(candidate, "heartbeat.json")):
+        return candidate
     return None
 
 
 @mcp.tool()
 def chip_backup(chip_name: str):
-    """Back up a chip's content files to the blob store.
+    """Back up a chip's unencrypted surface to local volume and/or backup drive.
 
-    Hashes all files in HOT/ and COLD/, stores deduplicated blobs,
-    writes a timestamped manifest. Git tracks metadata; this tracks content.
+    Creates a timestamped zip per the chip's heartbeat backup config.
+    Writes to ~/Documents/jeff-backups (iCloud-synced) and any mounted
+    backup-volume flash drive. FIFO rotates oldest backups.
 
     Args:
         chip_name: Chip color (yellow, red, blue) or label.
@@ -368,6 +698,8 @@ def chip_backup(chip_name: str):
     chip_dir = _resolve_chip(chip_name)
     if not chip_dir:
         return json.dumps({"error": "Chip not found: %s" % chip_name})
+    if not _volume_alive(chip_dir):
+        return json.dumps({"error": "Chip not reachable: %s" % chip_dir})
 
     _notify_stream("backup", "backing up %s" % chip_name)
     result = _backup.backup(chip_name.lower(), chip_dir)
@@ -377,7 +709,7 @@ def chip_backup(chip_name: str):
 
 @mcp.tool()
 def chip_backup_status(chip_name: str):
-    """Show backup history and state for a chip.
+    """Show backup history across all tiers (local + backup volumes).
 
     Args:
         chip_name: Chip color (yellow, red, blue) or label.
@@ -418,8 +750,6 @@ def chip_backup_list(chip_name: str, manifest: str = ""):
 # ============================================================
 # DYNAMIC VAULT ROUTING
 # ============================================================
-
-import sqlite3
 
 VOLUMES_ACTIVE_FILE = os.path.join(JEFF_DIR, ".jeff-volumes-active.json")
 VOLUMES_FILE = os.path.join(JEFF_DIR, "volumes.json")
@@ -510,7 +840,10 @@ def _discover_active_vaults():
         if vol["name"] not in active:
             continue
         vol_path = vol["path"] if os.path.isabs(vol["path"]) else os.path.join(MAESTRO_ROOT, vol["path"])
-        if not os.path.isdir(vol_path):
+
+        # Liveness check -- if volume vanished, auto-deactivate and skip
+        if not _volume_alive(vol_path):
+            _auto_deactivate(vol["name"])
             continue
 
         if vol["type"] == "local":
@@ -528,7 +861,13 @@ def _discover_active_vaults():
             # Chip -- discover vault-* subdirs
             # Check card surface first, then mounted sparseimage
             scan_path = vol_path
-            surface_vaults = [d for d in os.listdir(vol_path)
+            try:
+                surface_entries = _safe_listdir(vol_path)
+            except VolumeGoneError:
+                _auto_deactivate(vol["name"])
+                continue
+
+            surface_vaults = [d for d in surface_entries
                              if os.path.isdir(os.path.join(vol_path, d))
                              and d.startswith("vault-")]
 
@@ -538,7 +877,13 @@ def _discover_active_vaults():
                 if mount_path:
                     scan_path = mount_path
 
-            for d in sorted(os.listdir(scan_path)):
+            try:
+                scan_entries = _safe_listdir(scan_path)
+            except VolumeGoneError:
+                _auto_deactivate(vol["name"])
+                continue
+
+            for d in scan_entries:
                 vault_dir = os.path.join(scan_path, d)
                 if not os.path.isdir(vault_dir) or not d.startswith("vault-"):
                     continue
@@ -557,8 +902,7 @@ def _discover_active_vaults():
                 hb_path = os.path.join(vol_path, "heartbeat.json")
                 if os.path.isfile(hb_path):
                     try:
-                        with open(hb_path) as f:
-                            hb = json.load(f)
+                        hb = _safe_json(hb_path)
                         for hb_vault in hb.get("vaults", []):
                             vault_name = hb_vault.get("name", "")
                             if vault_name:
@@ -571,8 +915,9 @@ def _discover_active_vaults():
                                     "sealed": True,
                                     "has_cuesheet": bool(hb_vault.get("cuesheet")),
                                 })
-                    except Exception:
-                        pass
+                    except VolumeGoneError:
+                        _auto_deactivate(vol["name"])
+                        continue
 
     return vaults
 
@@ -586,32 +931,13 @@ def _find_vault(vault_name):
 
 
 def _vault_db_query(vault, query, params=()):
-    """Run a query against a vault's database."""
-    if not vault.get("db"):
-        return []
-    try:
-        conn = sqlite3.connect(vault["db"])
-        conn.row_factory = sqlite3.Row
-        rows = [dict(r) for r in conn.execute(query, params).fetchall()]
-        conn.close()
-        return rows
-    except sqlite3.OperationalError:
-        return []
+    """Run a query against a vault's database. Returns (rows, error)."""
+    return _safe_db_query(vault.get("db"), query, params)
 
 
 def _vault_db_execute(vault, query, params=()):
     """Execute a write query against a vault's database."""
-    if not vault.get("db"):
-        return {"error": "no database"}
-    try:
-        conn = sqlite3.connect(vault["db"])
-        cur = conn.execute(query, params)
-        conn.commit()
-        result = {"rows_affected": cur.rowcount, "lastrowid": cur.lastrowid}
-        conn.close()
-        return result
-    except sqlite3.OperationalError as e:
-        return {"error": str(e)}
+    return _safe_db_execute(vault.get("db"), query, params)
 
 
 @mcp.tool()
@@ -630,16 +956,16 @@ def chip_discover():
             "type": v["type"],
         }
         if v.get("db"):
-            try:
-                conn = sqlite3.connect(v["db"])
-                entries = conn.execute("SELECT COUNT(DISTINCT slug) FROM vault_images").fetchone()[0]
-                images = conn.execute("SELECT COUNT(*) FROM vault_images").fetchone()[0]
-                conn.close()
-                info["entries"] = entries
-                info["images"] = images
-            except Exception:
+            rows, err = _safe_db_query(v["db"],
+                "SELECT COUNT(DISTINCT slug) as entries, COUNT(*) as images FROM vault_images")
+            if rows and not err:
+                info["entries"] = rows[0]["entries"]
+                info["images"] = rows[0]["images"]
+            else:
                 info["entries"] = 0
                 info["images"] = 0
+                if err:
+                    info["db_error"] = err
         else:
             info["entries"] = 0
             info["images"] = 0
@@ -652,7 +978,29 @@ def chip_discover():
             info["has_cuesheet"] = os.path.isfile(os.path.join(v["path"], "cue-sheet.yaml"))
         result.append(info)
 
-    return json.dumps({
+    # Scan physical chip surfaces for full manifest
+    surfaces = {}
+    registry = _load_registry()
+    active_names = set(_load_active_volumes())
+    for vol in registry:
+        if vol["name"] not in active_names:
+            continue
+        if not vol.get("physical"):
+            continue
+        vol_path = vol["path"] if os.path.isabs(vol["path"]) else os.path.join(MAESTRO_ROOT, vol["path"])
+        surface = _scan_chip_surface(vol_path)
+        surfaces[vol["name"]] = {
+            "datasets": surface["datasets"],
+            "models": surface["models"],
+            "docs": surface["docs"],
+            "schemas": surface["schemas"],
+            "has_mcp": surface["has_mcp"],
+            "has_sparseimage": surface["has_sparseimage"],
+            "has_search_index": surface["has_search_index"],
+            "model_name": surface["model_name"],
+        }
+
+    output = {
         "active_volumes": sorted(set(v["volume"] for v in vaults)),
         "vaults": result,
         "operations": [
@@ -662,7 +1010,11 @@ def chip_discover():
             "annotate", "get_annotations",
             "ingest",
         ],
-    }, indent=2)
+    }
+    if surfaces:
+        output["chip_surfaces"] = surfaces
+
+    return json.dumps(output, indent=2)
 
 
 @mcp.tool()
@@ -701,69 +1053,85 @@ def vault_query(vault: str, operation: str, slug: str = "", query: str = "",
     if operation == "status":
         entries = 0
         images = 0
+        db_err = None
         if v.get("db"):
-            try:
-                conn = sqlite3.connect(v["db"])
-                entries = conn.execute("SELECT COUNT(DISTINCT slug) FROM vault_images").fetchone()[0]
-                images = conn.execute("SELECT COUNT(*) FROM vault_images").fetchone()[0]
-                conn.close()
-            except Exception:
-                pass
-        return json.dumps({
+            rows, db_err = _vault_db_query(v,
+                "SELECT COUNT(DISTINCT slug) as entries, COUNT(*) as images FROM vault_images")
+            if rows and not db_err:
+                entries = rows[0]["entries"]
+                images = rows[0]["images"]
+        result = {
             "vault": vault,
             "volume": v["volume"],
             "type": v["type"],
             "entries": entries,
             "images": images,
-        })
+        }
+        if db_err:
+            result["db_error"] = db_err
+        return json.dumps(result)
 
     elif operation == "search":
         pattern = "%%%s%%" % (query or "")
-        rows = _vault_db_query(v,
+        rows, err = _vault_db_query(v,
             "SELECT DISTINCT slug FROM vault_images WHERE slug LIKE ? ORDER BY slug LIMIT ?",
             (pattern, int(limit)))
+        if err:
+            return json.dumps({"error": err})
         return json.dumps(rows)
 
     elif operation == "get":
         if not slug:
             return json.dumps({"error": "slug required for get"})
-        rows = _vault_db_query(v,
+        rows, err = _vault_db_query(v,
             "SELECT slug, filename, port FROM vault_images WHERE slug = ? ORDER BY filename",
             (slug,))
+        if err:
+            return json.dumps({"error": err})
         return json.dumps(rows)
 
     elif operation == "list_images":
-        rows = _vault_db_query(v,
+        rows, err = _vault_db_query(v,
             "SELECT slug, filename, port FROM vault_images ORDER BY slug, filename LIMIT ?",
             (int(limit),))
+        if err:
+            return json.dumps({"error": err})
         return json.dumps(rows)
 
     elif operation == "search_images":
         pattern = "%%%s%%" % (query or "")
-        rows = _vault_db_query(v,
+        rows, err = _vault_db_query(v,
             "SELECT slug, filename, port FROM vault_images "
             "WHERE slug LIKE ? OR filename LIKE ? ORDER BY slug, filename LIMIT ?",
             (pattern, pattern, int(limit)))
+        if err:
+            return json.dumps({"error": err})
         return json.dumps(rows)
 
     elif operation == "filter":
-        rows = _vault_db_query(v,
+        rows, err = _vault_db_query(v,
             "SELECT DISTINCT slug FROM vault_images ORDER BY slug LIMIT ?",
             (int(limit),))
+        if err:
+            return json.dumps({"error": err})
         return json.dumps(rows)
 
     elif operation == "list_galleries":
-        rows = _vault_db_query(v,
+        rows, err = _vault_db_query(v,
             "SELECT slug, title, created_at FROM galleries ORDER BY created_at DESC LIMIT ?",
             (int(limit),))
+        if err:
+            return json.dumps({"error": err})
         return json.dumps(rows)
 
     elif operation == "get_gallery":
         if not slug:
             return json.dumps({"error": "slug required for get_gallery"})
-        rows = _vault_db_query(v,
+        rows, err = _vault_db_query(v,
             "SELECT slug, title, images, created_at FROM galleries WHERE slug = ? LIMIT 1",
             (slug,))
+        if err:
+            return json.dumps({"error": err})
         if not rows:
             return json.dumps({})
         gallery = rows[0]
@@ -783,19 +1151,24 @@ def vault_query(vault: str, operation: str, slug: str = "", query: str = "",
         if slugs:
             for s in slugs.split(","):
                 s = s.strip()
-                imgs = _vault_db_query(v,
+                imgs, err = _vault_db_query(v,
                     "SELECT slug, filename, port FROM vault_images WHERE slug = ? ORDER BY filename",
                     (s,))
-                images.extend(imgs)
+                if not err:
+                    images.extend(imgs)
         elif query:
             pattern = "%%%s%%" % query
-            images = _vault_db_query(v,
+            imgs, err = _vault_db_query(v,
                 "SELECT slug, filename, port FROM vault_images "
                 "WHERE slug LIKE ? OR filename LIKE ? ORDER BY slug, filename LIMIT 50",
                 (pattern, pattern))
+            if not err:
+                images = imgs
         result = _vault_db_execute(v,
             "INSERT OR REPLACE INTO galleries (slug, title, images, created_at) VALUES (?, ?, ?, ?)",
             (gal_slug, title, json.dumps(images), utc_now))
+        if result.get("error"):
+            return json.dumps(result)
         return json.dumps({"slug": gal_slug, "title": title, "images": images, "created_at": utc_now})
 
     elif operation == "annotate":
@@ -805,22 +1178,26 @@ def vault_query(vault: str, operation: str, slug: str = "", query: str = "",
             "INSERT INTO vault_annotations (slug, filename, content, source, created_at) "
             "VALUES (?, ?, ?, 'mcp', ?)",
             (slug, filename, body, utc_now))
+        if result.get("error"):
+            return json.dumps(result)
         return json.dumps({"slug": slug, "filename": filename, "body": body, "id": result.get("lastrowid")})
 
     elif operation == "get_annotations":
         q = "SELECT id, slug, filename, content as body, pinned FROM vault_annotations"
-        params = []
+        params_list = []
         filters = []
         if slug:
             filters.append("slug = ?")
-            params.append(slug)
+            params_list.append(slug)
         if filename:
             filters.append("filename = ?")
-            params.append(filename)
+            params_list.append(filename)
         if filters:
             q += " WHERE " + " AND ".join(filters)
         q += " ORDER BY id DESC"
-        rows = _vault_db_query(v, q, tuple(params))
+        rows, err = _vault_db_query(v, q, tuple(params_list))
+        if err:
+            return json.dumps({"error": err})
         return json.dumps(rows)
 
     elif operation == "ingest":

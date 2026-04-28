@@ -54,7 +54,7 @@ def load_registry():
         with open(VOLUMES_FILE) as f:
             registry = json.load(f)
 
-    # Scan /Volumes/ for physical chips with heartbeat.json
+    # Scan /Volumes/ for physical chips and backup volumes with heartbeat.json
     known_paths = {v["path"] for v in registry}
     if VOLUMES_SCAN_DIR.is_dir():
         for d in sorted(VOLUMES_SCAN_DIR.iterdir()):
@@ -71,15 +71,28 @@ def load_registry():
                 # Skip if a registry entry already points here
                 if vol_path in known_paths or str(d.relative_to("/")) in known_paths:
                     continue
+                fmt = chip.get("format", "")
                 label = chip.get("label", d.name)
-                name = "sd:%s" % label.lower()
-                registry.append({
-                    "name": name,
-                    "type": "chip",
-                    "path": vol_path,
-                    "physical": True,
-                    "label": label,
-                })
+                if fmt == "backup-volume":
+                    name = "bv:%s" % label.lower()
+                    registry.append({
+                        "name": name,
+                        "type": "backup",
+                        "path": vol_path,
+                        "physical": True,
+                        "label": label,
+                        "capacity_gb": chip.get("capacity_gb", 0),
+                        "accepts_from": chip.get("accepts_from", []),
+                    })
+                else:
+                    name = "sd:%s" % label.lower()
+                    registry.append({
+                        "name": name,
+                        "type": "chip",
+                        "path": vol_path,
+                        "physical": True,
+                        "label": label,
+                    })
             except Exception:
                 continue
 
@@ -112,15 +125,21 @@ def _vault_info(vault_path):
             entries = conn.execute("SELECT COUNT(DISTINCT slug) FROM vault_images").fetchone()[0]
             images = conn.execute("SELECT COUNT(*) FROM vault_images").fetchone()[0]
             conn.close()
-        except Exception:
+        except (sqlite3.OperationalError, OSError):
             pass
 
     hot = vault_path / "HOT"
     size_bytes = 0
-    if hot.exists():
-        for f in hot.rglob("*"):
-            if f.is_file():
-                size_bytes += f.stat().st_size
+    try:
+        if hot.exists():
+            for f in hot.rglob("*"):
+                if f.is_file():
+                    try:
+                        size_bytes += f.stat().st_size
+                    except OSError:
+                        pass
+    except OSError:
+        pass
 
     if size_bytes == 0:
         size_str = "empty"
@@ -132,6 +151,33 @@ def _vault_info(vault_path):
         size_str = "%.1fG" % (size_bytes / (1024 * 1024 * 1024))
 
     return entries, images, size_str
+
+
+def _chip_surface_summary(vol_path):
+    """One-line summary of what's on a chip surface beyond vaults."""
+    parts = []
+    try:
+        if (vol_path / "mcp").is_dir():
+            parts.append("mcp")
+        ds_dir = vol_path / "datasets"
+        if ds_dir.is_dir():
+            count = sum(1 for f in ds_dir.iterdir() if f.suffix in (".json", ".md"))
+            if count:
+                parts.append("%d datasets" % count)
+        models_dir = vol_path / "models"
+        if models_dir.is_dir():
+            model_files = [f for f in models_dir.iterdir() if f.is_file()]
+            if model_files:
+                total_mb = sum(f.stat().st_size for f in model_files) / (1024 * 1024)
+                parts.append("model %.0fMB" % total_mb)
+        if (vol_path / "vault.sparseimage").is_file():
+            parts.append("encrypted")
+        idx = vol_path / ".jeff" / "index" / "search.json"
+        if idx.is_file():
+            parts.append("indexed")
+    except OSError:
+        parts.append("(unreachable)")
+    return ", ".join(parts)
 
 
 def _vol_path(vol):
@@ -194,7 +240,10 @@ def _heartbeat_vaults(vol):
 def _discover_vaults(vol):
     """Discover vault directories for a volume."""
     vol_path = _vol_path(vol)
-    if not vol_path.exists():
+    try:
+        if not vol_path.exists():
+            return []
+    except OSError:
         return []
 
     if vol["type"] == "local":
@@ -202,16 +251,23 @@ def _discover_vaults(vol):
         return [vol_path]
 
     # Chip: check for vault-* on card surface first (legacy/unencrypted layout)
-    surface_vaults = sorted([d for d in vol_path.iterdir()
-                            if d.is_dir() and d.name.startswith("vault-")])
+    try:
+        surface_vaults = sorted([d for d in vol_path.iterdir()
+                                if d.is_dir() and d.name.startswith("vault-")])
+    except OSError:
+        return []
+
     if surface_vaults:
         return surface_vaults
 
     # No vaults on surface -- check mounted sparseimage
     mount_path = _chip_vault_mount(vol)
     if mount_path:
-        return sorted([d for d in mount_path.iterdir()
-                      if d.is_dir() and d.name.startswith("vault-")])
+        try:
+            return sorted([d for d in mount_path.iterdir()
+                          if d.is_dir() and d.name.startswith("vault-")])
+        except OSError:
+            return []
 
     # Not mounted -- return empty (heartbeat manifest used elsewhere for metadata)
     return []
@@ -289,18 +345,46 @@ def cmd_list():
 
         vaults = _discover_vaults(vol) if exists else []
 
+        if vol["type"] == "backup":
+            # Backup volume -- show capacity and what it accepts
+            if exists:
+                accepts = vol.get("accepts_from", [])
+                cap = vol.get("capacity_gb", 0)
+                backups_dir = vol_path / "backups"
+                zip_count = len(list(backups_dir.glob("*.zip"))) if backups_dir.is_dir() else 0
+                detail = "%dGB" % cap if cap else "unknown size"
+                if accepts:
+                    detail += ", accepts %s" % "+".join(accepts)
+                if zip_count:
+                    detail += ", %d backups" % zip_count
+            else:
+                detail = "not found"
+            vol_type = "bv"
+            print("  [%s] %-14s %-6s %s" % (marker, vol["name"], vol_type, detail))
+            continue
+
         if vol["type"] == "local" and exists:
             entries, images, size = _vault_info(vol_path)
             detail = "%d entries, %s" % (entries, size)
         elif vol["type"] == "chip" and vaults:
             detail = "%d vaults" % len(vaults)
+            # Add surface info for physical chips
+            if vol.get("physical") or (exists and (vol_path / "heartbeat.json").is_file()):
+                extras = _chip_surface_summary(vol_path)
+                if extras:
+                    detail += " | %s" % extras
         elif vol["type"] == "chip" and not vaults and exists:
             # No vaults on surface or mounted -- check heartbeat manifest
             hb_vaults = _heartbeat_vaults(vol)
             if hb_vaults:
                 detail = "%d vaults (sealed)" % len(hb_vaults)
             else:
-                detail = "empty"
+                detail = "no vaults"
+            # Still show surface info
+            if vol.get("physical") or (vol_path / "heartbeat.json").is_file():
+                extras = _chip_surface_summary(vol_path)
+                if extras:
+                    detail += " | %s" % extras
         elif not exists:
             detail = "not found"
         else:

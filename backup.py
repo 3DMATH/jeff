@@ -1,292 +1,473 @@
-"""Jeff backup system -- content-addressed backup with rotation.
+"""Jeff backup system -- zip-based chip backup with FIFO rotation.
 
-Backs up chip content (HOT/COLD directories) to a nested vault inside
-the blob store. Each backup is a manifest of SHA-256 hashes pointing
-to deduplicated blobs. Rotation keeps N most recent manifests.
+Two backup tiers:
+  1. Local volume: ~/Documents/jeff-backups (iCloud-synced), capped, FIFO
+  2. Backup volume: physical flash drive with format "backup-volume" heartbeat
 
-Git tracks schema + MCP + vault.db (metadata).
-Jeff backup tracks actual content files (media, documents, etc).
+Backup config lives on the chip's heartbeat.json under the "backup" key.
+The spec (CHIP_SPEC_v1.0) says unknown fields MUST be preserved, so this
+is forward-compatible without a protocol bump.
 
-Design:
-  - Backup root: {blob_store}/backups/{chip_name}/
-  - Each backup: manifest-{timestamp}.json (file list + hashes)
-  - Blobs: shared {blob_store}/{ab}/{cd}/{hash} (same as vault blob store)
-  - Rotation: keep max_backups manifests, purge orphaned blobs
+Backup flow:
+  1. Read chip heartbeat for backup config (include/exclude/scope)
+  2. Walk the unencrypted chip surface per include/exclude globs
+  3. Create a timestamped zip
+  4. Write zip to local volume and/or backup volume
+  5. FIFO rotate: oldest zips deleted when cap exceeded
 """
 
-import hashlib
+import fnmatch
 import json
 import os
 import shutil
-import time
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
 
-DEFAULT_STORE = "/Users/nickcottrell/Documents/cue-vault-store"
-DEFAULT_MAX_BACKUPS = 5
+# ============================================================
+# DEFAULTS
+# ============================================================
+
+DEFAULT_LOCAL_PATH = os.path.expanduser("~/Documents/jeff-backups")
+DEFAULT_CAP_MB = 10240  # 10 GB
+DEFAULT_RETENTION = 5
+DEFAULT_INCLUDE = ["vault-*", "datasets", "*.sql", "vault.db.split", ".jeff"]
+DEFAULT_EXCLUDE = ["models", "vault.sparseimage", ".fseventsd", ".Spotlight-V100", ".DS_Store", "*.zip"]
 
 
-def _store_root():
-    return os.environ.get("CUE_VAULT_STORE", DEFAULT_STORE)
+# ============================================================
+# HEARTBEAT HELPERS
+# ============================================================
+
+def _read_heartbeat(chip_path):
+    """Read heartbeat.json from a chip or volume path."""
+    hb_path = os.path.join(chip_path, "heartbeat.json")
+    if not os.path.isfile(hb_path):
+        return None
+    try:
+        with open(hb_path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
-def _backup_dir(chip_name):
-    d = os.path.join(_store_root(), "backups", chip_name)
-    os.makedirs(d, exist_ok=True)
-    return d
+def _backup_config(heartbeat):
+    """Extract backup config from heartbeat, with defaults."""
+    cfg = heartbeat.get("backup", {}) if heartbeat else {}
+    local = cfg.get("local", {})
+    return {
+        "local_path": local.get("path", DEFAULT_LOCAL_PATH),
+        "cap_mb": local.get("cap_mb", DEFAULT_CAP_MB),
+        "retention": local.get("retention", DEFAULT_RETENTION),
+        "scope": cfg.get("scope", "chip"),
+        "include": cfg.get("include", DEFAULT_INCLUDE),
+        "exclude": cfg.get("exclude", DEFAULT_EXCLUDE),
+    }
 
 
-def _blob_path(file_hash):
-    store = _store_root()
-    return os.path.join(store, file_hash[:2], file_hash[2:4], file_hash)
+# ============================================================
+# BACKUP VOLUME DETECTION
+# ============================================================
 
+def discover_backup_volumes():
+    """Scan /Volumes/ for flash drives with backup-volume heartbeats."""
+    volumes = []
+    volumes_dir = "/Volumes"
+    if not os.path.isdir(volumes_dir):
+        return volumes
 
-def _hash_file(filepath):
-    h = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        while True:
-            chunk = f.read(65536)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _store_blob(filepath, file_hash=None):
-    """Copy file to blob store if not already there. Returns blob path."""
-    if file_hash is None:
-        file_hash = _hash_file(filepath)
-    blob = _blob_path(file_hash)
-    if os.path.isfile(blob):
-        return blob  # already deduplicated
-    os.makedirs(os.path.dirname(blob), exist_ok=True)
-    shutil.copy2(filepath, blob)
-    return blob
-
-
-def _walk_content(chip_dir):
-    """Walk HOT/, COLD/, and vault.db files, yielding (rel_path, abs_path)."""
-    chip = Path(chip_dir)
-
-    # Walk content directories
-    for port_name in ("HOT", "COLD"):
-        port = chip / port_name
-        if not port.is_dir():
+    for name in sorted(os.listdir(volumes_dir)):
+        if name == "Macintosh HD":
             continue
-        for root, dirs, files in os.walk(str(port)):
-            # Skip hidden dirs
-            dirs[:] = [d for d in dirs if not d.startswith(".")]
-            for filename in files:
-                if filename.startswith("."):
-                    continue
-                abs_path = os.path.join(root, filename)
-                rel_path = os.path.relpath(abs_path, str(chip))
-                yield rel_path, abs_path
+        vol_path = os.path.join(volumes_dir, name)
+        hb = _read_heartbeat(vol_path)
+        if hb and hb.get("format") == "backup-volume":
+            volumes.append({
+                "path": vol_path,
+                "label": hb.get("label", name),
+                "device_id": hb.get("device_id", ""),
+                "capacity_gb": hb.get("capacity_gb", 0),
+                "accepts_from": hb.get("accepts_from", []),
+            })
 
-    # Include vault.db files (live state for apps like Markets)
-    for db_file in chip.glob("vault.db"):
-        yield db_file.name, str(db_file)
-    # Also check vault subdirectories (chip volumes have vault-*/vault.db)
-    for db_file in chip.glob("vault-*/vault.db"):
-        yield str(db_file.relative_to(chip)), str(db_file)
+    return volumes
 
 
-def backup(chip_name, chip_dir):
-    """Create a backup of chip content.
+def _find_backup_volume_for(chip_label):
+    """Find a mounted backup volume that accepts this chip."""
+    for vol in discover_backup_volumes():
+        accepts = vol.get("accepts_from", [])
+        if not accepts or chip_label.upper() in [a.upper() for a in accepts]:
+            return vol
+    return None
 
-    Hashes all files in HOT/ and COLD/, stores blobs in the shared
-    blob store, writes a manifest to backups/{chip_name}/.
 
-    Args:
-        chip_name: Chip identifier (e.g. "yellow", "red", "blue")
-        chip_dir: Absolute path to chip staging directory
+# ============================================================
+# FILE WALKING
+# ============================================================
 
-    Returns:
-        Dict with backup statistics
+def _matches_any(name, patterns):
+    """Check if name matches any glob pattern in the list."""
+    for pattern in patterns:
+        if fnmatch.fnmatch(name, pattern):
+            return True
+    return False
+
+
+def _walk_surface(chip_path, include, exclude):
+    """Walk chip surface per include/exclude, yielding (rel_path, abs_path).
+
+    Include/exclude operate on top-level names. If a top-level entry matches
+    include and does not match exclude, all its contents are included.
+    """
+    try:
+        entries = sorted(os.listdir(chip_path))
+    except OSError:
+        return
+
+    for entry in entries:
+        if entry.startswith(".") and entry != ".jeff":
+            continue
+        if _matches_any(entry, exclude):
+            continue
+        if not _matches_any(entry, include):
+            continue
+
+        abs_path = os.path.join(chip_path, entry)
+
+        if os.path.isfile(abs_path):
+            if not _matches_any(entry, exclude):
+                yield entry, abs_path
+        elif os.path.isdir(abs_path):
+            for root, dirs, files in os.walk(abs_path):
+                # Skip hidden dirs and tmp
+                dirs[:] = [d for d in dirs if not d.startswith(".")
+                           and d != "tmp"]
+                for filename in files:
+                    if filename.startswith("."):
+                        continue
+                    if _matches_any(filename, exclude):
+                        continue
+                    full = os.path.join(root, filename)
+                    rel = os.path.relpath(full, chip_path)
+                    yield rel, full
+
+
+# ============================================================
+# ZIP CREATION
+# ============================================================
+
+def _create_zip(chip_path, chip_label, include, exclude):
+    """Create a timestamped zip of chip surface content.
+
+    Returns (zip_path, file_count, total_bytes) or raises on failure.
+    The zip is created in a temp location first, then returned.
     """
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    manifest_name = "manifest-%s.json" % timestamp
-    backup_root = _backup_dir(chip_name)
+    zip_name = "%s-%s.zip" % (chip_label.lower(), timestamp)
+    tmp_dir = os.path.join(chip_path, ".jeff", "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    zip_path = os.path.join(tmp_dir, zip_name)
 
-    files = []
+    file_count = 0
     total_bytes = 0
-    new_blobs = 0
-    skipped = 0
 
-    for rel_path, abs_path in _walk_content(chip_dir):
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for rel_path, abs_path in _walk_surface(chip_path, include, exclude):
+            try:
+                zf.write(abs_path, rel_path)
+                total_bytes += os.path.getsize(abs_path)
+                file_count += 1
+            except OSError:
+                continue
+
+    return zip_path, zip_name, file_count, total_bytes
+
+
+# ============================================================
+# FIFO ROTATION
+# ============================================================
+
+def _fifo_rotate(backup_dir, chip_label, retention, cap_mb):
+    """Delete oldest backups to stay within retention count and cap.
+
+    Returns list of deleted filenames.
+    """
+    pattern = "%s-*.zip" % chip_label.lower()
+    zips = sorted(Path(backup_dir).glob(pattern))
+
+    deleted = []
+
+    # Retention count: keep only N newest
+    if len(zips) > retention:
+        to_prune = zips[:len(zips) - retention]
+        for z in to_prune:
+            try:
+                z.unlink()
+                deleted.append(z.name)
+            except OSError:
+                pass
+        zips = sorted(Path(backup_dir).glob(pattern))
+
+    # Cap: delete oldest until under cap
+    if cap_mb > 0:
+        cap_bytes = cap_mb * 1024 * 1024
+        total = sum(z.stat().st_size for z in zips if z.is_file())
+        while total > cap_bytes and zips:
+            oldest = zips.pop(0)
+            try:
+                total -= oldest.stat().st_size
+                oldest.unlink()
+                deleted.append(oldest.name)
+            except OSError:
+                pass
+
+    return deleted
+
+
+# ============================================================
+# PUBLIC API
+# ============================================================
+
+def backup(chip_name, chip_path):
+    """Create a zip backup of a chip's unencrypted surface.
+
+    Reads backup config from heartbeat.json. Writes zip to:
+      1. Local backup volume (always, if configured)
+      2. Physical backup volume (if mounted and accepts this chip)
+
+    Args:
+        chip_name: Chip label (e.g. "blue", "yellow")
+        chip_path: Absolute path to chip (staging dir or /Volumes/LABEL)
+
+    Returns:
+        Dict with backup results
+    """
+    hb = _read_heartbeat(chip_path)
+    cfg = _backup_config(hb)
+    chip_label = chip_name.upper()
+
+    # Create the zip
+    try:
+        zip_path, zip_name, file_count, total_bytes = _create_zip(
+            chip_path, chip_label, cfg["include"], cfg["exclude"])
+    except Exception as exc:
+        return {"error": "Zip creation failed: %s" % exc}
+
+    zip_size = os.path.getsize(zip_path)
+    results = {
+        "chip": chip_label,
+        "zip": zip_name,
+        "file_count": file_count,
+        "total_bytes": total_bytes,
+        "zip_size_mb": round(zip_size / (1024 * 1024), 1),
+        "targets": [],
+    }
+
+    # Tier 1: Local backup volume
+    local_path = os.path.expanduser(cfg["local_path"])
+    os.makedirs(local_path, exist_ok=True)
+    local_dest = os.path.join(local_path, zip_name)
+    try:
+        shutil.copy2(zip_path, local_dest)
+        deleted = _fifo_rotate(local_path, chip_label,
+                               cfg["retention"], cfg["cap_mb"])
+        results["targets"].append({
+            "type": "local",
+            "path": local_dest,
+            "rotated": deleted,
+        })
+    except OSError as exc:
+        results["targets"].append({
+            "type": "local",
+            "error": "Copy failed: %s" % exc,
+        })
+
+    # Tier 2: Physical backup volume (if available)
+    bv = _find_backup_volume_for(chip_label)
+    if bv:
+        bv_dir = os.path.join(bv["path"], "backups")
+        os.makedirs(bv_dir, exist_ok=True)
+        bv_dest = os.path.join(bv_dir, zip_name)
         try:
-            file_size = os.path.getsize(abs_path)
-            # Resolve symlinks to get real file
-            real_path = os.path.realpath(abs_path)
-            file_hash = _hash_file(real_path)
-
-            # Store blob (deduplicates automatically)
-            blob = _blob_path(file_hash)
-            if not os.path.isfile(blob):
-                _store_blob(real_path, file_hash)
-                new_blobs += 1
-            else:
-                skipped += 1
-
-            files.append({
-                "path": rel_path,
-                "hash": file_hash,
-                "size": file_size,
+            shutil.copy2(zip_path, bv_dest)
+            # Backup volumes use retention from chip config, no cap
+            deleted = _fifo_rotate(bv_dir, chip_label, cfg["retention"], 0)
+            results["targets"].append({
+                "type": "backup-volume",
+                "label": bv["label"],
+                "path": bv_dest,
+                "rotated": deleted,
             })
-            total_bytes += file_size
-        except (IOError, OSError) as e:
-            files.append({
-                "path": rel_path,
-                "error": str(e),
+        except OSError as exc:
+            results["targets"].append({
+                "type": "backup-volume",
+                "label": bv["label"],
+                "error": "Copy failed: %s" % exc,
             })
 
-    manifest = {
-        "chip": chip_name,
-        "source": str(chip_dir),
-        "timestamp": datetime.now().isoformat(),
-        "file_count": len([f for f in files if "hash" in f]),
-        "total_bytes": total_bytes,
-        "new_blobs": new_blobs,
-        "deduplicated": skipped,
-        "files": files,
-    }
+    # Clean up temp zip
+    try:
+        os.unlink(zip_path)
+    except OSError:
+        pass
 
-    manifest_path = os.path.join(backup_root, manifest_name)
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
+    results["message"] = "Backed up %d files (%.1f MB zip) to %d targets" % (
+        file_count, zip_size / (1024 * 1024), len([t for t in results["targets"] if "error" not in t]))
 
-    return {
-        "manifest": manifest_name,
-        "manifest_path": manifest_path,
-        "file_count": manifest["file_count"],
-        "total_bytes": total_bytes,
-        "new_blobs": new_blobs,
-        "deduplicated": skipped,
-        "message": "Backed up %d files (%d new blobs, %d deduplicated)" % (
-            manifest["file_count"], new_blobs, skipped
-        ),
-    }
+    return results
 
 
 def status(chip_name):
-    """Get backup status for a chip.
+    """Get backup status across all tiers.
 
     Returns:
-        Dict with backup history and current state
+        Dict with backup history per tier
     """
-    backup_root = _backup_dir(chip_name)
-    manifests = sorted(Path(backup_root).glob("manifest-*.json"), reverse=True)
+    chip_label = chip_name.upper()
+    pattern = "%s-*.zip" % chip_label.lower()
+    result = {"chip": chip_label, "tiers": []}
 
-    history = []
-    for manifest_path in manifests:
-        try:
-            with open(manifest_path) as f:
-                m = json.load(f)
-            history.append({
-                "manifest": manifest_path.name,
-                "timestamp": m.get("timestamp", "?"),
-                "file_count": m.get("file_count", 0),
-                "total_bytes": m.get("total_bytes", 0),
+    # Local tier
+    local_path = os.path.expanduser(DEFAULT_LOCAL_PATH)
+    if os.path.isdir(local_path):
+        zips = sorted(Path(local_path).glob(pattern), reverse=True)
+        history = []
+        total_mb = 0
+        for z in zips:
+            try:
+                size_mb = z.stat().st_size / (1024 * 1024)
+                total_mb += size_mb
+                history.append({
+                    "name": z.name,
+                    "size_mb": round(size_mb, 1),
+                    "modified": datetime.fromtimestamp(z.stat().st_mtime).isoformat(),
+                })
+            except OSError:
+                continue
+        result["tiers"].append({
+            "type": "local",
+            "path": local_path,
+            "backup_count": len(history),
+            "total_mb": round(total_mb, 1),
+            "history": history,
+        })
+
+    # Backup volume tiers
+    for bv in discover_backup_volumes():
+        accepts = bv.get("accepts_from", [])
+        if accepts and chip_label not in [a.upper() for a in accepts]:
+            continue
+        bv_dir = os.path.join(bv["path"], "backups")
+        if not os.path.isdir(bv_dir):
+            result["tiers"].append({
+                "type": "backup-volume",
+                "label": bv["label"],
+                "backup_count": 0,
+                "history": [],
             })
-        except (json.JSONDecodeError, IOError):
             continue
 
-    return {
-        "chip": chip_name,
-        "backup_count": len(history),
-        "history": history,
-        "backup_dir": backup_root,
-    }
+        zips = sorted(Path(bv_dir).glob(pattern), reverse=True)
+        history = []
+        for z in zips:
+            try:
+                size_mb = z.stat().st_size / (1024 * 1024)
+                history.append({
+                    "name": z.name,
+                    "size_mb": round(size_mb, 1),
+                    "modified": datetime.fromtimestamp(z.stat().st_mtime).isoformat(),
+                })
+            except OSError:
+                continue
+        result["tiers"].append({
+            "type": "backup-volume",
+            "label": bv["label"],
+            "backup_count": len(history),
+            "history": history,
+        })
+
+    return result
 
 
 def rotate(chip_name, max_backups=None):
-    """Rotate backups, keeping only the N most recent manifests.
-
-    Blobs are NOT deleted during rotation (they may be shared across
-    chips or referenced by the vault blob store). Only manifests are
-    pruned.
+    """Manually trigger FIFO rotation on local tier.
 
     Args:
-        chip_name: Chip identifier
-        max_backups: Max manifests to keep (default 5)
+        chip_name: Chip label
+        max_backups: Override retention count
 
     Returns:
-        Dict with rotation statistics
+        Dict with rotation results
     """
-    if max_backups is None:
-        max_backups = DEFAULT_MAX_BACKUPS
+    chip_label = chip_name.upper()
+    retention = max_backups or DEFAULT_RETENTION
 
-    backup_root = _backup_dir(chip_name)
-    manifests = sorted(Path(backup_root).glob("manifest-*.json"))
+    local_path = os.path.expanduser(DEFAULT_LOCAL_PATH)
+    if not os.path.isdir(local_path):
+        return {"chip": chip_label, "kept": 0, "pruned": 0, "message": "No local backup dir"}
 
-    if len(manifests) <= max_backups:
-        return {
-            "chip": chip_name,
-            "kept": len(manifests),
-            "pruned": 0,
-            "message": "No rotation needed (%d/%d)" % (len(manifests), max_backups),
-        }
-
-    to_prune = manifests[:len(manifests) - max_backups]
-    pruned_names = []
-
-    for manifest_path in to_prune:
-        try:
-            manifest_path.unlink()
-            pruned_names.append(manifest_path.name)
-        except OSError:
-            pass
+    deleted = _fifo_rotate(local_path, chip_label, retention, DEFAULT_CAP_MB)
+    pattern = "%s-*.zip" % chip_label.lower()
+    remaining = len(list(Path(local_path).glob(pattern)))
 
     return {
-        "chip": chip_name,
-        "kept": max_backups,
-        "pruned": len(pruned_names),
-        "pruned_manifests": pruned_names,
-        "message": "Rotated: kept %d, pruned %d" % (max_backups, len(pruned_names)),
+        "chip": chip_label,
+        "kept": remaining,
+        "pruned": len(deleted),
+        "pruned_files": deleted,
+        "message": "Rotated: kept %d, pruned %d" % (remaining, len(deleted)),
     }
 
 
 def restore_list(chip_name, manifest_name=None):
-    """List files in a backup manifest (latest if not specified).
+    """List contents of a backup zip.
+
+    Args:
+        chip_name: Chip label
+        manifest_name: Specific zip filename (default: latest from local tier)
 
     Returns:
-        Dict with file list and blob availability
+        Dict with file list from the zip
     """
-    backup_root = _backup_dir(chip_name)
+    chip_label = chip_name.upper()
+    pattern = "%s-*.zip" % chip_label.lower()
 
+    # Find the zip
     if manifest_name:
-        manifest_path = os.path.join(backup_root, manifest_name)
+        # Check local first, then backup volumes
+        local_path = os.path.expanduser(DEFAULT_LOCAL_PATH)
+        zip_path = os.path.join(local_path, manifest_name)
+        if not os.path.isfile(zip_path):
+            for bv in discover_backup_volumes():
+                candidate = os.path.join(bv["path"], "backups", manifest_name)
+                if os.path.isfile(candidate):
+                    zip_path = candidate
+                    break
+        if not os.path.isfile(zip_path):
+            return {"error": "Backup not found: %s" % manifest_name}
     else:
-        manifests = sorted(Path(backup_root).glob("manifest-*.json"), reverse=True)
-        if not manifests:
-            return {"error": "No backups found for %s" % chip_name}
-        manifest_path = str(manifests[0])
+        local_path = os.path.expanduser(DEFAULT_LOCAL_PATH)
+        zips = sorted(Path(local_path).glob(pattern), reverse=True) if os.path.isdir(local_path) else []
+        if not zips:
+            return {"error": "No backups found for %s" % chip_label}
+        zip_path = str(zips[0])
 
     try:
-        with open(manifest_path) as f:
-            manifest = json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        return {"error": "Cannot read manifest: %s" % e}
-
-    files = []
-    for entry in manifest.get("files", []):
-        if "hash" not in entry:
-            files.append({"path": entry.get("path"), "available": False, "error": entry.get("error")})
-            continue
-        blob = _blob_path(entry["hash"])
-        files.append({
-            "path": entry["path"],
-            "hash": entry["hash"],
-            "size": entry.get("size", 0),
-            "available": os.path.isfile(blob),
-        })
-
-    return {
-        "chip": chip_name,
-        "manifest": os.path.basename(manifest_path),
-        "timestamp": manifest.get("timestamp"),
-        "files": files,
-        "total": len(files),
-        "available": sum(1 for f in files if f.get("available")),
-    }
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            files = []
+            for info in zf.infolist():
+                files.append({
+                    "path": info.filename,
+                    "size": info.file_size,
+                    "compressed": info.compress_size,
+                })
+        return {
+            "chip": chip_label,
+            "backup": os.path.basename(zip_path),
+            "file_count": len(files),
+            "files": files,
+        }
+    except (zipfile.BadZipFile, OSError) as exc:
+        return {"error": "Cannot read backup: %s" % exc}
