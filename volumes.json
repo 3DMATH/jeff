@@ -4,14 +4,19 @@
     "type": "local",
     "path": "vault-hot",
     "auto_activate": true,
-    "env": {"VAULT_NAME": "hot"}
+    "env": {
+      "VAULT_NAME": "hot"
+    }
   },
   {
     "name": "cold",
     "type": "local",
     "path": "vault-cold",
     "auto_activate": false,
-    "env": {"VAULT_NAME": "cold", "VAULT_MODE": "lite"}
+    "env": {
+      "VAULT_NAME": "cold",
+      "VAULT_MODE": "lite"
+    }
   },
   {
     "name": "chip-red",
@@ -32,5 +37,14 @@
     "name": "chip-gray",
     "type": "chip",
     "path": "chip-gray"
+  },
+  {
+    "name": "test_vault",
+    "type": "local",
+    "path": "vault-test_vault",
+    "auto_activate": false,
+    "env": {
+      "VAULT_NAME": "test_vault"
+    }
   }
 ]

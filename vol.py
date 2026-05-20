@@ -6,6 +6,7 @@ Activated = visible to MCP chain. Deactivated = invisible.
 
 Usage:
     vol.py list                  # show all volumes
+    vol.py create <name>         # create + register a new local volume
     vol.py up <name>             # activate a volume
     vol.py down <name>           # deactivate a volume
     vol.py active                # list active volume names
@@ -394,6 +395,61 @@ def cmd_list():
         print("  [%s] %-14s %-6s %s" % (marker, vol["name"], vol_type, detail))
 
 
+def cmd_create(name, activate=False):
+    """Register a new local volume and create its directory.
+
+    Creates vault-<name>/ at maestro root and appends an entry to volumes.json.
+    Refuses if a volume with this name already exists, or if the directory is
+    already present.
+    """
+    name = name.strip()
+    if not name:
+        print("Volume name is empty", file=sys.stderr)
+        return 1
+
+    # Load registry from the on-disk file (not the auto-discovered union)
+    if VOLUMES_FILE.exists():
+        with open(VOLUMES_FILE) as f:
+            registry = json.load(f)
+    else:
+        registry = []
+
+    if any(v["name"] == name for v in registry):
+        print("Volume already registered: %s" % name, file=sys.stderr)
+        return 1
+
+    rel_path = "vault-%s" % name
+    vol_dir = MAESTRO_ROOT / rel_path
+    if vol_dir.exists():
+        print("Directory already exists: %s" % vol_dir, file=sys.stderr)
+        return 1
+
+    vol_dir.mkdir(parents=True)
+
+    registry.append({
+        "name": name,
+        "type": "local",
+        "path": rel_path,
+        "auto_activate": False,
+        "env": {"VAULT_NAME": name},
+    })
+
+    with open(VOLUMES_FILE, "w") as f:
+        json.dump(registry, f, indent=2)
+        f.write("\n")
+
+    print("Created volume: %s" % name)
+    print("  Path:    %s" % vol_dir)
+    print("  Type:    local")
+
+    if activate:
+        return cmd_up(name)
+
+    print("")
+    print("  Activate with: jeff vol up %s" % name)
+    return 0
+
+
 def cmd_up(name):
     """Activate a volume."""
     registry = load_registry()
@@ -468,6 +524,12 @@ def main():
 
     if command == "list":
         cmd_list()
+    elif command == "create":
+        if len(sys.argv) < 3:
+            print("Usage: vol.py create <name> [--activate]", file=sys.stderr)
+            return 1
+        activate = "--activate" in sys.argv[3:]
+        return cmd_create(sys.argv[2], activate=activate)
     elif command == "up":
         if len(sys.argv) < 3:
             print("Usage: vol.py up <name>", file=sys.stderr)

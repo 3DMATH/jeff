@@ -20,6 +20,12 @@
 #    unmount                  Seal vault
 #    flip                     Toggle read-only / read-write
 #
+#  Vault Tree (inside active mount):
+#    vault list               Tree of nested vaults
+#    vault path <slug>        Absolute path for slug (exit 1 if missing)
+#    vault create <slug>      Create nested vault (read-write only)
+#    vault check <slug>       Validate slug
+#
 #  Diagnostics:
 #    status                   Detailed chip info
 #    state                    Machine-readable state (JSON)
@@ -1423,6 +1429,12 @@ cmd_help() {
     echo "    unmount                  Seal vault"
     echo "    flip                     Toggle read-only / read-write"
     echo ""
+    echo "  Vault Tree (inside active mount):"
+    echo "    vault list               Tree of nested vaults"
+    echo "    vault path <slug>        Absolute path for slug"
+    echo "    vault create <slug>      Create nested vault (read-write only)"
+    echo "    vault check <slug>       Validate slug"
+    echo ""
     echo "  Diagnostics:"
     echo "    status                   Detailed chip info"
     echo "    state                    Machine-readable state (JSON)"
@@ -1448,6 +1460,7 @@ cmd_help() {
     echo ""
     echo "  Volumes:"
     echo "    vol                      List all volumes + status"
+    echo "    vol create <name>        Create + register a new local volume"
     echo "    vol up <name>            Activate volume (updates .mcp.json)"
     echo "    vol down <name>          Deactivate volume"
     echo "    graduate <slug> <target> Move entry from HOT to target vault"
@@ -1464,11 +1477,16 @@ cmd_help() {
 
 VOL_SCRIPT="${JEFF_DIR}/vol.py"
 GRADUATE_SCRIPT="${JEFF_DIR}/graduate.py"
+VAULT_SCRIPT="${JEFF_DIR}/vault.py"
 
 cmd_vol() {
     local subcmd="${1:-list}"
     shift 2>/dev/null || true
     python3 "${VOL_SCRIPT}" "${subcmd}" "$@"
+}
+
+cmd_vault() {
+    python3 "${VAULT_SCRIPT}" "$@"
 }
 
 cmd_graduate() {
@@ -1557,6 +1575,7 @@ case "${COMMAND}" in
 
     # Volumes
     vol)            cmd_vol "$@" ;;
+    vault)          cmd_vault "$@" ;;
     graduate)       cmd_graduate "$@" ;;
 
     # Dashboard (default)

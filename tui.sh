@@ -76,6 +76,7 @@ _jeff_tui_build_menu() {
         read-write)
             _jt_title="Jeff (${label}) [READ-WRITE]"
             _jt_items+=("Status")              ; _jt_handlers+=("_jeff_tui_status")
+            _jt_items+=("Vaults")              ; _jt_handlers+=("_jeff_tui_vaults")
             _jt_items+=("Resolve Hex")         ; _jt_handlers+=("_jeff_tui_resolve")
             _jt_items+=("Midpoint")            ; _jt_handlers+=("_jeff_tui_midpoint")
             _jt_items+=("Run CueSheet")        ; _jt_handlers+=("_jeff_tui_run_sheet")
@@ -85,6 +86,7 @@ _jeff_tui_build_menu() {
         read-only)
             _jt_title="Jeff (${label}) [READ-ONLY]"
             _jt_items+=("Status")              ; _jt_handlers+=("_jeff_tui_status")
+            _jt_items+=("Vaults")              ; _jt_handlers+=("_jeff_tui_vaults")
             _jt_items+=("Resolve Hex")         ; _jt_handlers+=("_jeff_tui_resolve")
             _jt_items+=("Midpoint")            ; _jt_handlers+=("_jeff_tui_midpoint")
             _jt_items+=("Flip to Read-Write")  ; _jt_handlers+=("_jeff_tui_flip")
@@ -92,12 +94,13 @@ _jeff_tui_build_menu() {
             ;;
         *)
             _jt_title="Jeff"
-            _jt_items+=("Scan")         ; _jt_handlers+=("_jeff_tui_scan")
-            _jt_items+=("Activate")     ; _jt_handlers+=("_jeff_tui_activate")
-            _jt_items+=("Flash")        ; _jt_handlers+=("_jeff_tui_flash")
-            _jt_items+=("Init")         ; _jt_handlers+=("_jeff_tui_init")
-            _jt_items+=("Status")       ; _jt_handlers+=("_jeff_tui_status")
-            _jt_items+=("Version")      ; _jt_handlers+=("_jeff_tui_version")
+            _jt_items+=("Scan")                 ; _jt_handlers+=("_jeff_tui_scan")
+            _jt_items+=("Activate")             ; _jt_handlers+=("_jeff_tui_activate")
+            _jt_items+=("Create Local Volume")  ; _jt_handlers+=("_jeff_tui_create_volume")
+            _jt_items+=("Flash")                ; _jt_handlers+=("_jeff_tui_flash")
+            _jt_items+=("Init")                 ; _jt_handlers+=("_jeff_tui_init")
+            _jt_items+=("Status")               ; _jt_handlers+=("_jeff_tui_status")
+            _jt_items+=("Version")              ; _jt_handlers+=("_jeff_tui_version")
             ;;
     esac
 }
@@ -338,6 +341,33 @@ for v in json.load(sys.stdin):
 }
 
 # ============================================================
+# HANDLERS: Local Volume Creation
+# ============================================================
+
+_jeff_tui_create_volume() {
+    echo ""
+    echo "  Create a new local volume in the maestro repo."
+    echo "  It will live at vault-<name>/ and be registered in volumes.json."
+    echo ""
+
+    tui_input "Volume name (e.g. test_vault)" || return 1
+    local vol_name="${TUI_RESULT}"
+
+    if [[ -z "${vol_name}" ]]; then
+        echo "  Cancelled."
+        return 1
+    fi
+
+    echo ""
+    "${JEFF_CLI}" vol create "${vol_name}" || return 1
+
+    echo ""
+    if tui_confirm "Activate ${vol_name} now?"; then
+        "${JEFF_CLI}" vol up "${vol_name}"
+    fi
+}
+
+# ============================================================
 # HANDLERS: Vault CueSheets
 # ============================================================
 
@@ -385,4 +415,183 @@ _jeff_tui_run_sheet() {
     echo "  Running: $(basename "${selected}")"
     echo ""
     cat "${selected}"
+}
+
+# ============================================================
+# HANDLERS: Nested Vault Tree
+# ============================================================
+
+# Current state mode -- "read-write" or "read-only"
+_jeff_tui_vault_mode() {
+    "${JEFF_CLI}" state | python3 -c "import json,sys; print(json.load(sys.stdin).get('mode',''))" 2>/dev/null || echo ""
+}
+
+# Direct children of a slug prefix.
+# Args: prefix ("" for root)
+# Stdout: one slug per line
+_jeff_tui_vault_children() {
+    local prefix="$1"
+    "${JEFF_CLI}" vault list --json 2>/dev/null | python3 - "${prefix}" << 'PYEOF'
+import json, sys
+prefix = sys.argv[1]
+data = json.load(sys.stdin)
+for v in data:
+    slug = v.get("slug", "")
+    if prefix == "":
+        if "/" not in slug:
+            print(slug)
+    else:
+        rest = slug[len(prefix) + 1:] if slug.startswith(prefix + "/") else ""
+        if rest and "/" not in rest:
+            print(slug)
+PYEOF
+}
+
+# Public entry: opens the root vaults menu.
+_jeff_tui_vaults() {
+    _jeff_tui_vault_menu ""
+}
+
+# Recursive menu: lists children of prefix, lets user drill in or create.
+# Args: prefix ("" for root, "cube" for cube's children, etc.)
+_jeff_tui_vault_menu() {
+    local prefix="$1"
+    local mode
+    mode=$(_jeff_tui_vault_mode)
+
+    while true; do
+        local title
+        if [[ -z "${prefix}" ]]; then
+            title="Vaults"
+        else
+            title="Vault: ${prefix}"
+        fi
+
+        # Collect children
+        local children=()
+        while IFS= read -r line; do
+            [[ -z "${line}" ]] && continue
+            children+=("${line}")
+        done < <(_jeff_tui_vault_children "${prefix}")
+
+        local labels=()
+        local actions=()  # parallel array: "drill:<slug>" or "create" or "show:<slug>"
+
+        local c
+        for c in "${children[@]}"; do
+            # Strip prefix for display
+            local display="${c}"
+            if [[ -n "${prefix}" ]]; then
+                display="${c#${prefix}/}"
+            fi
+            labels+=("${display}")
+            actions+=("drill:${c}")
+        done
+
+        if [[ "${mode}" == "read-write" ]]; then
+            labels+=("[Create vault here]")
+            actions+=("create")
+        fi
+
+        labels+=("Back")
+
+        tui_menu "${title}" "${labels[@]}"
+
+        local idx="${TUI_INDEX}"
+        if [[ "${idx}" -ge "${#actions[@]}" ]] || [[ "${idx}" -eq -1 ]]; then
+            return 0
+        fi
+
+        local action="${actions[${idx}]}"
+
+        case "${action}" in
+            drill:*)
+                local sub_slug="${action#drill:}"
+                _jeff_tui_vault_action "${sub_slug}"
+                ;;
+            create)
+                _jeff_tui_vault_create "${prefix}"
+                ;;
+        esac
+    done
+}
+
+# When a vault is selected -- show info, then offer drill / create-child.
+_jeff_tui_vault_action() {
+    local slug="$1"
+    local mode
+    mode=$(_jeff_tui_vault_mode)
+
+    local path
+    path=$("${JEFF_CLI}" vault path "${slug}" 2>/dev/null || echo "")
+
+    echo ""
+    echo "  Vault: ${slug}"
+    if [[ -n "${path}" ]]; then
+        echo "  Path:  ${path}"
+    fi
+    echo ""
+
+    local labels=("Enter (show children)")
+    local actions=("enter")
+
+    if [[ "${mode}" == "read-write" ]]; then
+        labels+=("[Create child here]")
+        actions+=("create-child")
+    fi
+    labels+=("Back")
+
+    tui_menu "${slug}" "${labels[@]}"
+
+    local idx="${TUI_INDEX}"
+    if [[ "${idx}" -ge "${#actions[@]}" ]] || [[ "${idx}" -eq -1 ]]; then
+        return 0
+    fi
+
+    case "${actions[${idx}]}" in
+        enter)
+            _jeff_tui_vault_menu "${slug}"
+            ;;
+        create-child)
+            _jeff_tui_vault_create "${slug}"
+            ;;
+    esac
+}
+
+# Prompt for a new vault name under the given parent slug ("" = root).
+_jeff_tui_vault_create() {
+    local parent="$1"
+
+    echo ""
+    if [[ -z "${parent}" ]]; then
+        echo "  New root vault"
+    else
+        echo "  New vault under: ${parent}"
+    fi
+    echo ""
+
+    tui_input "Slug segment (lowercase, hyphens ok)" || return 1
+    local segment="${TUI_RESULT}"
+
+    if [[ -z "${segment}" ]]; then
+        echo "  Cancelled."
+        return 1
+    fi
+
+    local full_slug
+    if [[ -z "${parent}" ]]; then
+        full_slug="${segment}"
+    else
+        full_slug="${parent}/${segment}"
+    fi
+
+    tui_input "Display name (optional, defaults to slug)" || true
+    local display_name="${TUI_RESULT}"
+
+    echo ""
+    if [[ -n "${display_name}" ]]; then
+        "${JEFF_CLI}" vault create "${full_slug}" --name "${display_name}"
+    else
+        "${JEFF_CLI}" vault create "${full_slug}"
+    fi
 }
