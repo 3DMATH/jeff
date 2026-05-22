@@ -46,5 +46,32 @@
     "env": {
       "VAULT_NAME": "test_vault"
     }
+  },
+  {
+    "name": "portfolio",
+    "type": "local",
+    "path": "vault-portfolio",
+    "auto_activate": false,
+    "env": {
+      "VAULT_NAME": "portfolio"
+    }
+  },
+  {
+    "name": "personal",
+    "type": "local",
+    "path": "vault-personal",
+    "auto_activate": false,
+    "env": {
+      "VAULT_NAME": "personal"
+    }
+  },
+  {
+    "name": "work",
+    "type": "local",
+    "path": "vault-work",
+    "auto_activate": false,
+    "env": {
+      "VAULT_NAME": "work"
+    }
   }
 ]
