@@ -73,5 +73,14 @@
     "env": {
       "VAULT_NAME": "work"
     }
+  },
+  {
+    "name": "line-one",
+    "type": "local",
+    "path": "vault-line-one",
+    "auto_activate": false,
+    "env": {
+      "VAULT_NAME": "line-one"
+    }
   }
 ]

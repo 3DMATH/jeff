@@ -1222,8 +1222,121 @@ def vault_query(vault: str, operation: str, slug: str = "", query: str = "",
 
 
 # ============================================================
+# DYNAMIC NAMED-TOOL PROJECTION (tools-in-vaults)
+# ============================================================
+
+def _register_active_vault_tools():
+    """Surface each active vault's OWN named tools on the jeff proxy.
+
+    At startup, discover active local vaults that ship a tool CLI
+    (app/mcp/server.py --list/--call), enumerate their declared tools, and
+    register a forwarding wrapper for each via mcp.add_tool. The vault stays the
+    single source of truth for its tools; the proxy is just the router.
+
+    This is the first-class sibling of the generic vault_query router: instead of
+    vault_query(vault="line-one", operation="intake"), the model sees the real
+    named tool line_one_intake with its real parameters. Newly activated vaults
+    surface on the next reconnect, since MCP clients load the tool list at
+    connect time -- the honest cost of named (vs. one generic) tools.
+    """
+    import asyncio
+    import inspect
+    import subprocess
+
+    json_py = {"string": str, "integer": int, "number": float, "boolean": bool}
+
+    try:
+        existing = {t.name for t in asyncio.run(mcp.list_tools())}
+    except Exception:
+        existing = set()
+
+    for v in _discover_active_vaults():
+        if v.get("type") != "local":
+            continue
+        server_py = os.path.join(v["path"], "app", "mcp", "server.py")
+        if not os.path.isfile(server_py):
+            continue
+
+        # Opt-in guard: only probe vaults whose server.py declares the
+        # --list/--call CLI. A legacy read-only vault (template server, no CLI)
+        # would treat `--list` as an MCP launch and block on stdin -- so we skip
+        # it here and let it keep routing through the generic vault_query. Keeps
+        # proxy startup fast and never hangs on a vault that didn't opt in.
+        try:
+            with open(server_py, encoding="utf-8", errors="replace") as fh:
+                if "--list" not in fh.read():
+                    continue
+        except OSError:
+            continue
+
+        try:
+            listing = subprocess.run(
+                [sys.executable, server_py, "--list"],
+                capture_output=True, text=True, cwd=v["path"], timeout=10,
+                stdin=subprocess.DEVNULL,
+            )
+            specs = json.loads(listing.stdout.strip() or "[]")
+        except Exception as e:
+            sys.stderr.write("jeff: tool listing failed for %s: %s\n" % (v["vault"], e))
+            continue
+
+        vslug = v["vault"].replace("-", "_")
+        for spec in specs:
+            tname = spec.get("name")
+            if not tname:
+                continue
+            # On collision (e.g. every vault has vault_status), namespace it.
+            reg_name = tname if tname not in existing else "%s_%s" % (vslug, tname)
+            if reg_name in existing:
+                continue
+
+            # Mirror the vault tool's parameter schema onto the wrapper so the
+            # proxy advertises real params, not an opaque kwargs blob.
+            schema = spec.get("inputSchema") or {}
+            props = schema.get("properties", {}) or {}
+            required = set(schema.get("required", []) or [])
+            req_params, opt_params = [], []
+            for pname, pspec in props.items():
+                ann = json_py.get((pspec or {}).get("type"), str)
+                if pname in required:
+                    req_params.append(inspect.Parameter(
+                        pname, inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=ann))
+                else:
+                    opt_params.append(inspect.Parameter(
+                        pname, inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        default=(pspec or {}).get("default", None), annotation=ann))
+
+            def _make(_server_py, _cwd, _tname):
+                def _forward(**kwargs):
+                    res = subprocess.run(
+                        [sys.executable, _server_py, "--call", _tname,
+                         "--json", json.dumps(kwargs)],
+                        capture_output=True, text=True, cwd=_cwd, timeout=60,
+                        stdin=subprocess.DEVNULL,
+                    )
+                    out = res.stdout.strip()
+                    if not out:
+                        return json.dumps({"error": res.stderr.strip() or "forward failed"})
+                    return out
+                return _forward
+
+            wrapper = _make(server_py, v["path"], tname)
+            wrapper.__name__ = reg_name
+            wrapper.__doc__ = spec.get("description") or ("%s · %s" % (v["vault"], tname))
+            if req_params or opt_params:
+                wrapper.__signature__ = inspect.Signature(req_params + opt_params)
+
+            try:
+                mcp.add_tool(wrapper, name=reg_name, description=wrapper.__doc__)
+                existing.add(reg_name)
+            except Exception as e:
+                sys.stderr.write("jeff: could not register %s: %s\n" % (reg_name, e))
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
 if __name__ == "__main__":
+    _register_active_vault_tools()
     mcp.run(transport="stdio")
