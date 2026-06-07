@@ -15,7 +15,7 @@ set -uo pipefail
 JEFF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROXY="${JEFF_DIR}/mcp_proxy.py"
 STATE_FILE="${JEFF_DIR}/.jeff-state.json"
-EXPECTED_TOOLS=12
+EXPECTED_TOOLS=19
 VERBOSE=0
 QUIET=0
 
@@ -46,6 +46,20 @@ if [[ $QUIET -eq 0 ]]; then
     echo "  jeff preflight"
     echo "  =============="
     echo ""
+fi
+
+# ----------------------------------------------------------
+# 0. Interpreter resolution
+#    The bare `python3` resolved here is the SAME one .mcp.json
+#    will launch the server with. A venv missing `mcp` is the
+#    classic "Failed to connect" cause -- surface it loudly.
+# ----------------------------------------------------------
+PY_PATH=$(command -v python3 2>/dev/null)
+PY_VER=$(python3 --version 2>&1)
+if [[ -n "${PY_PATH}" ]]; then
+    pass "python3 -> ${PY_PATH} (${PY_VER})"
+else
+    fail "no python3 on PATH"
 fi
 
 # ----------------------------------------------------------
@@ -158,14 +172,90 @@ else
 fi
 
 # ----------------------------------------------------------
-# 7. MCP dependencies
+# 7. Declared dependencies (requirements.txt) all importable
+#    Checks each dep in the interpreter resolved above, not a
+#    guessed one. Import name != package name for some (pyyaml->yaml).
 # ----------------------------------------------------------
-MCP_DEP=$(python3 -c "import mcp; print('OK')" 2>&1)
-if [[ "${MCP_DEP}" == "OK" ]]; then
-    pass "mcp package installed"
+DEPS_OUT=$(python3 -c "
+import importlib
+# package-on-pypi -> import-name
+deps = {'mcp': 'mcp', 'pyyaml': 'yaml'}
+missing = []
+for pkg, mod in deps.items():
+    try:
+        importlib.import_module(mod)
+    except Exception:
+        missing.append(pkg)
+print('OK' if not missing else 'MISSING ' + ' '.join(missing))
+" 2>&1)
+if [[ "${DEPS_OUT}" == "OK" ]]; then
+    pass "all requirements.txt deps importable"
 else
-    fail "mcp package missing (pip install mcp)"
+    fail "missing deps: ${DEPS_OUT#MISSING }"
+    dim "fix: ${PY_PATH} -m pip install -r ${JEFF_DIR}/requirements.txt"
 fi
+
+# ----------------------------------------------------------
+# 8. Live stdio handshake -- the real "does it serve" check
+#    Imports passing does NOT mean the server answers. This
+#    spawns the proxy exactly as Claude Code will and sends a
+#    real JSON-RPC initialize, confirming serverInfo comes back.
+#    This is the check that catches the actual "Failed to connect".
+# ----------------------------------------------------------
+HANDSHAKE_OUT=$(cd "${JEFF_DIR}" && python3 - "${PROXY}" <<'PYEOF'
+import sys, json, subprocess, threading
+proxy = sys.argv[1]
+req = json.dumps({
+    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+    "params": {
+        "protocolVersion": "2024-11-05", "capabilities": {},
+        "clientInfo": {"name": "preflight", "version": "1.0"},
+    },
+}) + "\n"
+try:
+    p = subprocess.Popen(
+        [sys.executable, proxy],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, text=True,
+    )
+except Exception as e:
+    print("SPAWN_FAIL " + str(e)); sys.exit(0)
+
+result = {"line": None}
+def reader():
+    for line in p.stdout:
+        line = line.strip()
+        if line:
+            result["line"] = line
+            break
+t = threading.Thread(target=reader, daemon=True)
+t.start()
+try:
+    p.stdin.write(req); p.stdin.flush()
+except Exception as e:
+    p.kill(); print("WRITE_FAIL " + str(e)); sys.exit(0)
+t.join(timeout=8)
+p.kill()
+
+line = result["line"]
+if not line:
+    print("NO_RESPONSE"); sys.exit(0)
+try:
+    o = json.loads(line)
+    si = o.get("result", {}).get("serverInfo", {})
+    if si:
+        print("OK " + str(si.get("name")) + " " + str(si.get("version")))
+    else:
+        print("BAD_RESPONSE " + line[:100])
+except Exception:
+    print("NON_JSON " + line[:100])
+PYEOF
+)
+case "${HANDSHAKE_OUT}" in
+    OK\ *)  pass "live handshake: server responds (${HANDSHAKE_OUT#OK })" ;;
+    *)      fail "live handshake failed -- server will not connect"
+            dim "${HANDSHAKE_OUT}" ;;
+esac
 
 # ----------------------------------------------------------
 # SUMMARY
