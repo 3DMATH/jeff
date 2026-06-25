@@ -564,6 +564,45 @@ def engine_run(model_ref: str, prompt: str, system: str = "", max_tokens: int = 
 
 
 @mcp.tool()
+def engine_sync():
+    """Register the models on mounted, self-describing cards into the MCP system.
+
+    Scans mounted volumes for a card manifest (models/manifest.json) and links
+    each model (signed, provenance-gated). Call this after activating a card —
+    its models then become available via engine_list / engine_run. Idempotent.
+    """
+    cue_lib = os.path.join(JEFF_DIR, "..", "..", "cue-mem", "lib")
+    sys.path.insert(0, cue_lib)
+    try:
+        import model_host
+        return json.dumps({"registered": model_host.sync_mounted_cards()}, indent=2)
+    except Exception as exc:
+        return json.dumps({"error": "engine_sync error: %s" % exc})
+    finally:
+        sys.path.remove(cue_lib) if cue_lib in sys.path else None
+
+
+@mcp.tool()
+def engine_list():
+    """List the hosted models available to the MCP system, with gate status.
+
+    Each entry is a model you can run via engine_run(model_ref, ...). Auto-syncs
+    mounted cards first, so activating a card and calling this surfaces its
+    models without a separate step.
+    """
+    cue_lib = os.path.join(JEFF_DIR, "..", "..", "cue-mem", "lib")
+    sys.path.insert(0, cue_lib)
+    try:
+        import model_host
+        model_host.sync_mounted_cards()  # pick up freshly-activated cards
+        return json.dumps({"engines": model_host.available()}, indent=2)
+    except Exception as exc:
+        return json.dumps({"error": "engine_list error: %s" % exc})
+    finally:
+        sys.path.remove(cue_lib) if cue_lib in sys.path else None
+
+
+@mcp.tool()
 def chip_search(query: str, top_k: int = 5):
     """Search the chip's knowledge base.
 
