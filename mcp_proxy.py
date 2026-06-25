@@ -603,6 +603,28 @@ def engine_list():
 
 
 @mcp.tool()
+def jeff_readiness():
+    """Jeff's standing assessment of the model cascade -- a curated situation report.
+
+    Returns every model Jeff can reach, ranked best-first (runnable first, then by
+    capability), the always-on C2D2 floor, the configured default, and the single
+    best currently-runnable engine. Use this to curate the cascade and pick the
+    strongest model on hand. (Frontier/Claude -- the Computer -- sits above this
+    as an external tier Jeff does not host.)
+    """
+    cue_lib = os.path.join(JEFF_DIR, "..", "..", "cue-mem", "lib")
+    sys.path.insert(0, cue_lib)
+    try:
+        import model_host
+        model_host.sync_mounted_cards()  # current picture incl. freshly-mounted cards
+        return json.dumps(model_host.readiness(), indent=2)
+    except Exception as exc:
+        return json.dumps({"error": "jeff_readiness error: %s" % exc})
+    finally:
+        sys.path.remove(cue_lib) if cue_lib in sys.path else None
+
+
+@mcp.tool()
 def chip_search(query: str, top_k: int = 5):
     """Search the chip's knowledge base.
 
