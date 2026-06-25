@@ -384,6 +384,19 @@ def cmd_list():
         if vol["type"] == "local" and exists:
             entries, images, size = _vault_info(vol_path)
             detail = "%d entries, %s" % (entries, size)
+            # A local vault may also carry a model (e.g. bedrock) -- show it as a child.
+            mf = vol_path / "models" / "manifest.json"
+            if mf.is_file():
+                try:
+                    with open(mf) as _f:
+                        spec = json.load(_f)
+                    names = [m.get("name") or m.get("ollama_id")
+                             for m in spec.get("models", [])
+                             if (m.get("name") or m.get("ollama_id"))]
+                    if names:
+                        detail += " | model: %s" % ", ".join(names)
+                except Exception:
+                    pass
         elif vol["type"] == "chip" and vaults:
             detail = "%d vaults" % len(vaults)
             # Add surface info for physical chips

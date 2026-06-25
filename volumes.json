@@ -82,5 +82,14 @@
     "env": {
       "VAULT_NAME": "line-one"
     }
+  },
+  {
+    "name": "bedrock",
+    "type": "local",
+    "path": "vault-bedrock",
+    "auto_activate": true,
+    "env": {
+      "VAULT_NAME": "bedrock"
+    }
   }
 ]
