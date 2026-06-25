@@ -533,6 +533,37 @@ def chip_query(prompt: str, system: str = "", max_tokens: int = 2048):
 
 
 @mcp.tool()
+def engine_run(model_ref: str, prompt: str, system: str = "", max_tokens: int = 512):
+    """Run a Jeff-hosted model by reference, gated by provenance + weight hash.
+
+    ONE parameterized endpoint for every hosted model: linking a new model adds
+    a resolvable ref, never a new tool, so the MCP surface never changes (and no
+    restart is needed when models come and go). On every call the model's
+    provenance chain, Ed25519 signature, and weight hash are re-verified; a
+    tampered, unlinked, or unsigned model returns a PROVENANCE REJECT in the
+    receipt and never reaches the runtime.
+
+    Args:
+        model_ref: hosted model reference, e.g. "engine/qwen2.5-7b"
+        prompt: the user prompt
+        system: optional system preamble
+        max_tokens: generation budget
+
+    Returns a JSON receipt: {ok, text, byline, reason, verification}.
+    """
+    cue_lib = os.path.join(JEFF_DIR, "..", "..", "cue-mem", "lib")
+    sys.path.insert(0, cue_lib)
+    try:
+        import model_host
+        receipt = model_host.run(model_ref, prompt, system=system, max_tokens=max_tokens)
+        return json.dumps(receipt, indent=2)
+    except Exception as exc:
+        return json.dumps({"ok": False, "text": None, "reason": "engine_run error: %s" % exc})
+    finally:
+        sys.path.remove(cue_lib) if cue_lib in sys.path else None
+
+
+@mcp.tool()
 def chip_search(query: str, top_k: int = 5):
     """Search the chip's knowledge base.
 
