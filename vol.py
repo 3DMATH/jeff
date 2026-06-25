@@ -170,7 +170,24 @@ def _chip_surface_summary(vol_path):
             model_files = [f for f in models_dir.iterdir() if f.is_file()]
             if model_files:
                 total_mb = sum(f.stat().st_size for f in model_files) / (1024 * 1024)
-                parts.append("model %.0fMB" % total_mb)
+                size = ("%.1fG" % (total_mb / 1024)) if total_mb >= 1024 else ("%.0fMB" % total_mb)
+                # Prefer the model name(s) from the manifest over raw bytes, so the
+                # row reads coherently with the engine constellation.
+                names = []
+                manifest = models_dir / "manifest.json"
+                if manifest.is_file():
+                    try:
+                        with open(manifest) as mf:
+                            spec = json.load(mf)
+                        names = [m.get("name") or m.get("ollama_id")
+                                 for m in spec.get("models", [])
+                                 if (m.get("name") or m.get("ollama_id"))]
+                    except Exception:
+                        names = []
+                if names:
+                    parts.append("model: %s (%s)" % (", ".join(names), size))
+                else:
+                    parts.append("model %s" % size)
         if (vol_path / "vault.sparseimage").is_file():
             parts.append("encrypted")
         idx = vol_path / ".jeff" / "index" / "search.json"
