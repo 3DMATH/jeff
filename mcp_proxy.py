@@ -728,8 +728,19 @@ def chip_search_semantic(query: str, volume: str = "", top_k: int = 5):
         import vecstore
         vs = vecstore.VecStore(sidecar)
         if not vs.load():
+            if vs.load_status == "corrupt":
+                return json.dumps({
+                    "error": "Sidecar is corrupt: %s -- rebuild: "
+                             "python3 tools/c2d2/cli.py index-chip --volume %s"
+                             % (sidecar, volume_path)
+                })
             return json.dumps({"error": "Sidecar failed to load: %s" % sidecar})
+        status = vs.status()
         results = vs.search(query, top_k=top_k)
+    except vecstore.VecStoreError as exc:
+        # Surfaceable degradation (embed down, dimension mismatch) -- announce,
+        # don't bury in a generic error. The mode line reads this.
+        return json.dumps({"error": str(exc), "degraded": True})
     except Exception as exc:
         return json.dumps({"error": str(exc)})
     finally:
@@ -741,6 +752,10 @@ def chip_search_semantic(query: str, volume: str = "", top_k: int = 5):
         "volume": volume_path,
         "sidecar": sidecar,
         "sidecar_location": location,
+        "built_at": status.get("built_at"),
+        "age": status.get("age"),
+        "stale": status.get("stale"),
+        "embed_model": status.get("embed_model"),
         "results": results,
     }, indent=2)
 
