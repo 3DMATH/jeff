@@ -796,7 +796,7 @@ def chip_backup(chip_name: str):
     """Back up a chip's unencrypted surface to local volume and/or backup drive.
 
     Creates a timestamped zip per the chip's heartbeat backup config.
-    Writes to ~/Documents/jeff-backups (iCloud-synced) and any mounted
+    Writes to ~/.jeff-backups (on-machine, not iCloud-synced) and any mounted
     backup-volume flash drive. FIFO rotates oldest backups.
 
     Args:

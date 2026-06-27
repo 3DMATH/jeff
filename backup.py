@@ -1,7 +1,7 @@
 """Jeff backup system -- zip-based chip backup with FIFO rotation.
 
 Two backup tiers:
-  1. Local volume: ~/Documents/jeff-backups (iCloud-synced), capped, FIFO
+  1. Local volume: ~/.jeff-backups (on-machine, NOT iCloud-synced), capped, FIFO
   2. Backup volume: physical flash drive with format "backup-volume" heartbeat
 
 Backup config lives on the chip's heartbeat.json under the "backup" key.
@@ -29,7 +29,11 @@ from pathlib import Path
 # DEFAULTS
 # ============================================================
 
-DEFAULT_LOCAL_PATH = os.path.expanduser("~/Documents/jeff-backups")
+# Off the iCloud sync boundary by design. ~/Documents is iCloud Desktop &
+# Documents synced, so vault content placed there would replicate to iCloud
+# unencrypted. The physical backup-volume tier provides off-machine durability;
+# this local tier is convenience/redundancy and stays on-machine only.
+DEFAULT_LOCAL_PATH = os.path.expanduser("~/.jeff-backups")
 DEFAULT_CAP_MB = 10240  # 10 GB
 DEFAULT_RETENTION = 5
 DEFAULT_INCLUDE = ["vault-*", "datasets", "*.sql", "vault.db.split", ".jeff"]
