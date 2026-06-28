@@ -912,7 +912,7 @@ if manifest:
 
     # Recompute identity hash
     hb["identity_hash"] = ""
-    canonical = json.dumps(hb, sort_keys=True, separators=(",", ":"))
+    canonical = json.dumps(hb, sort_keys=True, ensure_ascii=False)
     import hashlib
     hb["identity_hash"] = hashlib.sha256(canonical.encode()).hexdigest()
 
