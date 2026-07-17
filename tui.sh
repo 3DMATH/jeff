@@ -67,6 +67,7 @@ _jeff_tui_build_menu() {
         activated)
             _jt_title="Jeff (${label}) [ACTIVE]"
             _jt_items+=("Status")       ; _jt_handlers+=("_jeff_tui_status")
+            _jt_items+=("Toolchains")   ; _jt_handlers+=("_jeff_tui_toolchains")
             _jt_items+=("Scan")         ; _jt_handlers+=("_jeff_tui_scan")
             _jt_items+=("Resolve Hex")  ; _jt_handlers+=("_jeff_tui_resolve")
             _jt_items+=("Midpoint")     ; _jt_handlers+=("_jeff_tui_midpoint")
@@ -76,6 +77,7 @@ _jeff_tui_build_menu() {
         read-write)
             _jt_title="Jeff (${label}) [READ-WRITE]"
             _jt_items+=("Status")              ; _jt_handlers+=("_jeff_tui_status")
+            _jt_items+=("Toolchains")          ; _jt_handlers+=("_jeff_tui_toolchains")
             _jt_items+=("Vaults")              ; _jt_handlers+=("_jeff_tui_vaults")
             _jt_items+=("Resolve Hex")         ; _jt_handlers+=("_jeff_tui_resolve")
             _jt_items+=("Midpoint")            ; _jt_handlers+=("_jeff_tui_midpoint")
@@ -86,6 +88,7 @@ _jeff_tui_build_menu() {
         read-only)
             _jt_title="Jeff (${label}) [READ-ONLY]"
             _jt_items+=("Status")              ; _jt_handlers+=("_jeff_tui_status")
+            _jt_items+=("Toolchains")          ; _jt_handlers+=("_jeff_tui_toolchains")
             _jt_items+=("Vaults")              ; _jt_handlers+=("_jeff_tui_vaults")
             _jt_items+=("Resolve Hex")         ; _jt_handlers+=("_jeff_tui_resolve")
             _jt_items+=("Midpoint")            ; _jt_handlers+=("_jeff_tui_midpoint")
@@ -95,6 +98,7 @@ _jeff_tui_build_menu() {
         *)
             _jt_title="Jeff"
             _jt_items+=("Scan")                 ; _jt_handlers+=("_jeff_tui_scan")
+            _jt_items+=("Toolchains")           ; _jt_handlers+=("_jeff_tui_toolchains")
             _jt_items+=("Activate")             ; _jt_handlers+=("_jeff_tui_activate")
             _jt_items+=("Create Local Volume")  ; _jt_handlers+=("_jeff_tui_create_volume")
             _jt_items+=("Flash")                ; _jt_handlers+=("_jeff_tui_flash")
@@ -115,6 +119,10 @@ _jeff_tui_scan() {
 
 _jeff_tui_status() {
     "${JEFF_CLI}" status
+}
+
+_jeff_tui_toolchains() {
+    "${JEFF_CLI}" toolchains
 }
 
 _jeff_tui_version() {

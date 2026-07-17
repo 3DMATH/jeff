@@ -617,11 +617,43 @@ def jeff_readiness():
     try:
         import model_host
         model_host.sync_mounted_cards()  # current picture incl. freshly-mounted cards
-        return json.dumps(model_host.readiness(), indent=2)
+        report = model_host.readiness()
+        # Toolchains are the other half of "what can the substrate do right now":
+        # the model cascade answers WHO reasons, the toolchains answer WHAT the
+        # floor can reach without escalating.
+        try:
+            report["toolchains"] = _toolchain_summary()
+        except Exception as exc:
+            report["toolchains"] = {"error": str(exc)}
+        return json.dumps(report, indent=2)
     except Exception as exc:
         return json.dumps({"error": "jeff_readiness error: %s" % exc})
     finally:
         sys.path.remove(cue_lib) if cue_lib in sys.path else None
+
+
+def _toolchain_summary(probe=True):
+    """Load the toolchain registry (tools/jeff/toolchains.py)."""
+    sys.path.insert(0, JEFF_DIR)
+    try:
+        import toolchains
+        return toolchains.summary(probe=probe)
+    finally:
+        sys.path.remove(JEFF_DIR) if JEFF_DIR in sys.path else None
+
+
+@mcp.tool()
+def toolchain_list():
+    """List the toolchains Jeff owns the connection to -- the capability shelves
+    the system maintains (e.g. the C2D2 read shelf), with their tools, triage
+    capability, endpoint, and live status. Jeff is the doorway; the reasoning
+    inside each toolchain stays with the toolchain. This is what the Jeff panel
+    renders and what surfaces (cue-vox, ninja) read to route C2D2-first.
+    """
+    try:
+        return json.dumps({"toolchains": _toolchain_summary()}, indent=2)
+    except Exception as exc:
+        return json.dumps({"error": "toolchain_list error: %s" % exc})
 
 
 @mcp.tool()

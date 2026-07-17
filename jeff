@@ -1517,6 +1517,12 @@ cmd_version() {
     echo "jeff ${JEFF_VERSION}"
 }
 
+cmd_toolchains() {
+    # Jeff owns the connection to the system's toolchains -- discover, status,
+    # and expose them. The reasoning inside a toolchain stays with the toolchain.
+    python3 "${JEFF_DIR}/toolchains.py" "$@"
+}
+
 # ============================================================
 # DISPATCH
 # ============================================================
@@ -1580,6 +1586,10 @@ case "${COMMAND}" in
 
     # Dashboard (default)
     dashboard)      cmd_dashboard ;;
+
+    # Toolchains (the system's registered capability toolchains)
+    toolchains)     cmd_toolchains "$@" ;;
+    toolchain)      cmd_toolchains "$@" ;;
 
     # Info
     version)        cmd_version ;;
