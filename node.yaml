@@ -1,0 +1,14 @@
+# Node manifest -- single source of truth. Contract: docs/design/node-standard.md
+# jeff is its own repo, vendored into maestro as a submodule at tools/jeff.
+name:        jeff
+kind:        service                 # MCP server; host-launched, not a launchd service
+bucket:      private-brain
+path:        tools/jeff
+summary:     the data plane -- tool network keeping every MCP tool in the chain available
+entrypoint:  mcp_proxy.py
+runtime:     none                    # MCP-host-launched via .mcp.json ("jeff") -- not a START/STOP ALL service
+# No deploy verb: the mcp proxy is spawned by the Claude Code host (.mcp.json), not deployed.
+# Status reports the shelf's readiness; the proxy routes to the active chip at call time.
+verbs:
+  test:    test/run.sh
+  status:  status.sh
