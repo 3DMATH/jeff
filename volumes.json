@@ -28,35 +28,6 @@
     }
   },
   {
-    "name": "chip-red",
-    "type": "chip",
-    "path": "chip-red"
-  },
-  {
-    "name": "chip-yellow",
-    "type": "chip",
-    "path": "chip-yellow"
-  },
-  {
-    "name": "chip-blue",
-    "type": "chip",
-    "path": "chip-blue"
-  },
-  {
-    "name": "chip-gray",
-    "type": "chip",
-    "path": "chip-gray"
-  },
-  {
-    "name": "test_vault",
-    "type": "local",
-    "path": "vault-test_vault",
-    "auto_activate": false,
-    "env": {
-      "VAULT_NAME": "test_vault"
-    }
-  },
-  {
     "name": "portfolio",
     "type": "local",
     "path": "vault-portfolio",
