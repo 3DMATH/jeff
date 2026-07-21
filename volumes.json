@@ -2,7 +2,7 @@
   {
     "name": "tape_deck",
     "type": "local",
-    "path": "vault-tape_deck",
+    "path": "local-vaults/vault-tape_deck",
     "auto_activate": true,
     "env": {
       "VAULT_NAME": "tape_deck"
@@ -11,7 +11,7 @@
   {
     "name": "hot",
     "type": "local",
-    "path": "vault-hot",
+    "path": "local-vaults/vault-hot",
     "auto_activate": true,
     "env": {
       "VAULT_NAME": "hot"
@@ -20,7 +20,7 @@
   {
     "name": "cold",
     "type": "local",
-    "path": "vault-cold",
+    "path": "local-vaults/vault-cold",
     "auto_activate": false,
     "env": {
       "VAULT_NAME": "cold",
@@ -30,7 +30,7 @@
   {
     "name": "portfolio",
     "type": "local",
-    "path": "vault-portfolio",
+    "path": "local-vaults/vault-portfolio",
     "auto_activate": false,
     "env": {
       "VAULT_NAME": "portfolio"
@@ -39,7 +39,7 @@
   {
     "name": "personal",
     "type": "local",
-    "path": "vault-personal",
+    "path": "local-vaults/vault-personal",
     "auto_activate": false,
     "env": {
       "VAULT_NAME": "personal"
@@ -48,7 +48,7 @@
   {
     "name": "work",
     "type": "local",
-    "path": "vault-work",
+    "path": "local-vaults/vault-work",
     "auto_activate": false,
     "env": {
       "VAULT_NAME": "work"
@@ -57,7 +57,7 @@
   {
     "name": "line-one",
     "type": "local",
-    "path": "vault-line-one",
+    "path": "local-vaults/vault-line-one",
     "auto_activate": false,
     "env": {
       "VAULT_NAME": "line-one"
@@ -66,7 +66,7 @@
   {
     "name": "bedrock",
     "type": "local",
-    "path": "vault-bedrock",
+    "path": "local-vaults/vault-bedrock",
     "auto_activate": true,
     "env": {
       "VAULT_NAME": "bedrock"
@@ -75,7 +75,7 @@
   {
     "name": "carson",
     "type": "local",
-    "path": "vault-carson",
+    "path": "local-vaults/vault-carson",
     "auto_activate": true,
     "env": {
       "VAULT_NAME": "carson"
