@@ -1,5 +1,14 @@
 [
   {
+    "name": "tape_deck",
+    "type": "local",
+    "path": "vault-tape_deck",
+    "auto_activate": true,
+    "env": {
+      "VAULT_NAME": "tape_deck"
+    }
+  },
+  {
     "name": "hot",
     "type": "local",
     "path": "vault-hot",
@@ -90,6 +99,33 @@
     "auto_activate": true,
     "env": {
       "VAULT_NAME": "bedrock"
+    }
+  },
+  {
+    "name": "carson",
+    "type": "local",
+    "path": "vault-carson",
+    "auto_activate": true,
+    "env": {
+      "VAULT_NAME": "carson"
+    }
+  },
+  {
+    "name": "pipeline",
+    "type": "local",
+    "path": "vault-pipeline",
+    "auto_activate": false,
+    "env": {
+      "VAULT_NAME": "pipeline"
+    }
+  },
+  {
+    "name": "markets",
+    "type": "local",
+    "path": "vault-markets",
+    "auto_activate": false,
+    "env": {
+      "VAULT_NAME": "markets"
     }
   }
 ]
