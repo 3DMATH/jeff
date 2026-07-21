@@ -113,7 +113,7 @@
   {
     "name": "pipeline",
     "type": "local",
-    "path": "vault-pipeline",
+    "path": "vaults/vault-pipeline",
     "auto_activate": false,
     "env": {
       "VAULT_NAME": "pipeline"
@@ -122,7 +122,7 @@
   {
     "name": "markets",
     "type": "local",
-    "path": "vault-markets",
+    "path": "vaults/vault-markets",
     "auto_activate": false,
     "env": {
       "VAULT_NAME": "markets"
