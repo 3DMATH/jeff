@@ -111,18 +111,18 @@
     }
   },
   {
-    "name": "pipeline",
+    "name": "op-pipeline",
     "type": "local",
-    "path": "vaults/vault-pipeline",
+    "path": "local-operations/op-pipeline",
     "auto_activate": false,
     "env": {
       "VAULT_NAME": "pipeline"
     }
   },
   {
-    "name": "markets",
+    "name": "op-markets",
     "type": "local",
-    "path": "vaults/vault-markets",
+    "path": "local-operations/op-markets",
     "auto_activate": false,
     "env": {
       "VAULT_NAME": "markets"
