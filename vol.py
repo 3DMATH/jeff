@@ -28,17 +28,13 @@ VOLUMES_FILE = JEFF_DIR / "volumes.json"
 ACTIVE_FILE = JEFF_DIR / ".jeff-volumes-active.json"
 MCP_JSON = MAESTRO_ROOT / ".mcp.json"
 
-# Static MCP entries that Jeff never touches
+# Static MCP entries that Jeff never touches. Jeff is the sole substrate MCP now --
+# the legacy aggregator (keeper + old vault/llm surface) was retired 2026-07-21.
 STATIC_MCP = {
     "jeff": {
         "type": "stdio",
         "command": "python3",
         "args": ["tools/jeff/mcp_proxy.py"],
-    },
-    "legacy": {
-        "type": "stdio",
-        "command": "python3",
-        "args": ["tools/legacy-mcp/server.py"],
     },
 }
 
