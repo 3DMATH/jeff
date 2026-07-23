@@ -633,7 +633,7 @@ def jeff_readiness():
 
 
 def _toolchain_summary(probe=True):
-    """Load the toolchain registry (tools/jeff/toolchains.py)."""
+    """Load the toolchain registry (core/jeff/toolchains.py)."""
     sys.path.insert(0, JEFF_DIR)
     try:
         import toolchains
@@ -723,7 +723,7 @@ def chip_search_semantic(query: str, volume: str = "", top_k: int = 5):
     """Semantic search over a chip's unencrypted surface via the C2D2 vector layer.
 
     Loads a per-volume .vectors/ sidecar built by:
-        python3 tools/c2d2/cli.py index-chip --volume <path>
+        python3 core/c2d2/cli.py index-chip --volume <path>
 
     Args:
         query: Natural-language search query.
@@ -750,7 +750,7 @@ def chip_search_semantic(query: str, volume: str = "", top_k: int = 5):
     sidecar, location = _resolve_sidecar(volume_path, name)
     if not sidecar:
         return json.dumps({
-            "error": "No sidecar for %s. Build one: python3 tools/c2d2/cli.py index-chip --volume %s"
+            "error": "No sidecar for %s. Build one: python3 core/c2d2/cli.py index-chip --volume %s"
                      % (name, volume_path)
         })
 
@@ -763,7 +763,7 @@ def chip_search_semantic(query: str, volume: str = "", top_k: int = 5):
             if vs.load_status == "corrupt":
                 return json.dumps({
                     "error": "Sidecar is corrupt: %s -- rebuild: "
-                             "python3 tools/c2d2/cli.py index-chip --volume %s"
+                             "python3 core/c2d2/cli.py index-chip --volume %s"
                              % (sidecar, volume_path)
                 })
             return json.dumps({"error": "Sidecar failed to load: %s" % sidecar})
