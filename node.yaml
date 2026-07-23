@@ -1,9 +1,9 @@
 # Node manifest -- single source of truth. Contract: docs/design/node-standard.md
-# jeff is its own repo, vendored into maestro as a submodule at tools/jeff.
+# jeff is its own repo, vendored into maestro as a submodule at core/jeff.
 name:        jeff
 kind:        service                 # MCP server; host-launched, not a launchd service
 bucket:      private-brain
-path:        tools/jeff
+path:        core/jeff
 summary:     the data plane -- tool network keeping every MCP tool in the chain available
 entrypoint:  mcp_proxy.py
 runtime:     none                    # MCP-host-launched via .mcp.json ("jeff") -- not a START/STOP ALL service
