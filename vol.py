@@ -34,7 +34,7 @@ STATIC_MCP = {
     "jeff": {
         "type": "stdio",
         "command": "python3",
-        "args": ["tools/jeff/mcp_proxy.py"],
+        "args": ["core/jeff/mcp_proxy.py"],
     },
 }
 
