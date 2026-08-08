@@ -72,7 +72,6 @@ _jeff_tui_build_menu() {
             _jt_items+=("Resolve Hex")  ; _jt_handlers+=("_jeff_tui_resolve")
             _jt_items+=("Midpoint")     ; _jt_handlers+=("_jeff_tui_midpoint")
             _jt_items+=("Mount Vault")  ; _jt_handlers+=("_jeff_tui_mount")
-            _jt_items+=("Backups")      ; _jt_handlers+=("_jeff_tui_backups")
             _jt_items+=("Deactivate")   ; _jt_handlers+=("_jeff_tui_deactivate")
             ;;
         read-write)
@@ -83,7 +82,6 @@ _jeff_tui_build_menu() {
             _jt_items+=("Resolve Hex")         ; _jt_handlers+=("_jeff_tui_resolve")
             _jt_items+=("Midpoint")            ; _jt_handlers+=("_jeff_tui_midpoint")
             _jt_items+=("Run CueSheet")        ; _jt_handlers+=("_jeff_tui_run_sheet")
-            _jt_items+=("Backups")             ; _jt_handlers+=("_jeff_tui_backups")
             _jt_items+=("Flip to Read-Only")   ; _jt_handlers+=("_jeff_tui_flip")
             _jt_items+=("Unmount")             ; _jt_handlers+=("_jeff_tui_unmount")
             ;;
@@ -94,7 +92,6 @@ _jeff_tui_build_menu() {
             _jt_items+=("Vaults")              ; _jt_handlers+=("_jeff_tui_vaults")
             _jt_items+=("Resolve Hex")         ; _jt_handlers+=("_jeff_tui_resolve")
             _jt_items+=("Midpoint")            ; _jt_handlers+=("_jeff_tui_midpoint")
-            _jt_items+=("Backups")             ; _jt_handlers+=("_jeff_tui_backups")
             _jt_items+=("Flip to Read-Write")  ; _jt_handlers+=("_jeff_tui_flip")
             _jt_items+=("Unmount")             ; _jt_handlers+=("_jeff_tui_unmount")
             ;;
@@ -107,61 +104,10 @@ _jeff_tui_build_menu() {
             _jt_items+=("Flash")                ; _jt_handlers+=("_jeff_tui_flash")
             _jt_items+=("Init")                 ; _jt_handlers+=("_jeff_tui_init")
             _jt_items+=("Status")               ; _jt_handlers+=("_jeff_tui_status")
-            _jt_items+=("Backups")              ; _jt_handlers+=("_jeff_tui_backups")
             _jt_items+=("Version")              ; _jt_handlers+=("_jeff_tui_version")
             ;;
     esac
 }
-
-
-# ============================================================
-# Backups -- surface the host's encrypted-backup status, if present. Jeff is the
-# doorway: the host's backup engine drops a non-PII status manifest at the repo
-# root (.maestro-backup-status.json); we read and show it. Standalone jeff (no
-# host) simply reports "not configured". Never reads PII -- only store location,
-# counts, and integrity.
-# ============================================================
-
-_jeff_tui_backups() {
-    # Find the host's rendezvous manifest. Walk up from our dir (jeff may be at core/jeff of a
-    # host, or standalone) -- same idiom status.sh uses to locate the host venv.
-    local status_file="${MAESTRO_BACKUP_STATUS:-}"
-    if [[ -z "${status_file}" ]]; then
-        local _d="${_JEFF_TUI_DIR}"
-        for _ in 1 2 3 4; do
-            if [[ -f "${_d}/.maestro-backup-status.json" ]]; then
-                status_file="${_d}/.maestro-backup-status.json"; break
-            fi
-            _d=$(dirname "${_d}")
-        done
-    fi
-    echo ""
-    if [[ -z "${status_file}" || ! -f "${status_file}" ]]; then
-        echo "  Backups: not configured on this host."
-        echo "  (the host's backup engine writes .maestro-backup-status.json when active)"
-        return 0
-    fi
-    python3 - "${status_file}" <<'PY'
-import json, sys
-try:
-    s = json.load(open(sys.argv[1]))
-except Exception as e:
-    print("  Backups: status unreadable (%s)" % e); sys.exit(0)
-def human(n):
-    for u in ("B", "KB", "MB", "GB"):
-        if n < 1024: return "%.0f%s" % (n, u)
-        n /= 1024
-    return "%.1fTB" % n
-print("  Backup store : %s" % s.get("store", "?"))
-print("  Location     : %s" % s.get("provider", "?"))
-print("  Tracked      : %d files" % s.get("tracked", 0))
-print("  History      : %d snapshots, back to %s  (retain %dd)" % (s.get("snapshots", 0), s.get("oldest") or "-", s.get("retain_days", 30)))
-print("  Blobs        : %d  (%s)" % (s.get("blobs", 0), human(s.get("size_bytes", 0))))
-print("  Last backup  : %s" % (s.get("last_backup") or "never"))
-print("  Key          : %s" % ("present (out of store)" if s.get("key_present") else "MISSING -- cannot restore"))
-PY
-}
-
 
 # ============================================================
 # HANDLERS: Direct CLI passthrough
