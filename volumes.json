@@ -98,5 +98,14 @@
     "env": {
       "VAULT_NAME": "markets"
     }
+  },
+  {
+    "name": "c2d2-docs",
+    "type": "local",
+    "path": "local-vaults/vault-c2d2-docs",
+    "auto_activate": false,
+    "env": {
+      "VAULT_NAME": "c2d2-docs"
+    }
   }
 ]
