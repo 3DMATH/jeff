@@ -7,5 +7,7 @@
 # The state layer (model_host.gate) already reads live presence; this is the
 # runtime half. See core/jeff/reconcile-cards.py.
 set -u
-cd /Users/nickcottrell/maestro || exit 0
+# Resolve the maestro root from this script's location (core/jeff/ -> ../..), so the
+# reference repo carries no machine-specific path. MAESTRO_ROOT overrides if set.
+cd "${MAESTRO_ROOT:-$(dirname "$0")/../..}" || exit 0
 python3 core/jeff/reconcile-cards.py 2>&1

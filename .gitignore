@@ -6,3 +6,8 @@ __pycache__/
 .jeff-mcp.pid
 .jeff-heartbeat.pid
 .jeff-mcp.log
+
+# Working content -- your live vault registry + active set stay local, out of the public
+# reference repo. Copy the committed *.example.json to these filenames to configure a clone.
+volumes.json
+.jeff-volumes-active.json

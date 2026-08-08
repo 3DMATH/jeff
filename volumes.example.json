@@ -1,0 +1,30 @@
+[
+  {
+    "name": "hot",
+    "type": "local",
+    "path": "local-vaults/vault-hot",
+    "auto_activate": true,
+    "env": {
+      "VAULT_NAME": "hot"
+    }
+  },
+  {
+    "name": "cold",
+    "type": "local",
+    "path": "local-vaults/vault-cold",
+    "auto_activate": false,
+    "env": {
+      "VAULT_NAME": "cold",
+      "VAULT_MODE": "lite"
+    }
+  },
+  {
+    "name": "example-vault",
+    "type": "local",
+    "path": "local-vaults/vault-example",
+    "auto_activate": false,
+    "env": {
+      "VAULT_NAME": "example-vault"
+    }
+  }
+]
