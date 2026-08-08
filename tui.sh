@@ -154,11 +154,11 @@ def human(n):
     return "%.1fTB" % n
 print("  Backup store : %s" % s.get("store", "?"))
 print("  Location     : %s" % s.get("provider", "?"))
-print("  Tracked      : %d items  (%d hot, %d cold)" % (s.get("tracked", 0), s.get("hot", 0), s.get("cold", 0)))
+print("  Tracked      : %d files" % s.get("tracked", 0))
+print("  History      : %d snapshots, back to %s  (retain %dd)" % (s.get("snapshots", 0), s.get("oldest") or "-", s.get("retain_days", 30)))
 print("  Blobs        : %d  (%s)" % (s.get("blobs", 0), human(s.get("size_bytes", 0))))
 print("  Last backup  : %s" % (s.get("last_backup") or "never"))
 print("  Key          : %s" % ("present (out of store)" if s.get("key_present") else "MISSING -- cannot restore"))
-print("  Checked      : %s" % s.get("updated", "?"))
 PY
 }
 
