@@ -72,12 +72,35 @@ jeff midpoint "#FF0000" "#00FF00"  # discover midpoints
 jeff constellation "#F00" "#0F0" "#00F"
 ```
 
+## The terminal
+
+```bash
+jeff tui
+```
+
+A first-class, standalone terminal over the Vault Array -- a smaller cousin of Claude Code and
+Cue Vault, on the **same chrome and sounds** ([cue-tui-kit](https://github.com/3DMATH/cue-tui-kit)).
+It does not reimplement Jeff; it drives this same CLI, so it is always in sync with the
+substrate. The command rail adapts to Jeff's state -- idle, activated, read-write, read-only --
+and you arrow-step it, press Enter, or hit the letter, exactly like Cue Vault.
+
+Installable on its own (pulls in the kit):
+
+```bash
+pip install jeff-tui        # provides `jeff-tui`; `jeff tui` also launches it
+jeff tui
+```
+
+The Python TUI lives in `src/jefftui/` and shells out to the `jeff` CLI via `JEFF_CLI`. The old
+sourced `tui.sh` (for a host shell like maestro) still works; this is the standalone face.
+
 ## Requirements
 
 - macOS (hdiutil for AES-256 vault)
 - Python 3
 - MCP client (Claude Code, etc.)
 - Ollama (optional, for on-card model inference)
+- [cue-tui-kit](https://github.com/3DMATH/cue-tui-kit) for `jeff tui` (auto-found in a sibling checkout during dev)
 
 ## Install
 

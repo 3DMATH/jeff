@@ -1,0 +1,21 @@
+[project]
+name = "jeff-tui"
+version = "0.1.0"
+description = "The Jeff terminal -- a standalone, pip-installable TUI over the Jeff Vault Array, on the cue-tui-kit chrome. A smaller cousin of Cue Vault."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "3DMATH" }]
+# the terminal's only dependency is the shared chrome. in a dev checkout where the kit isn't
+# installed, jefftui falls back to a sibling ../cuekit/src (see jefftui/__init__.py).
+dependencies = ["cue-tui-kit>=0.1"]
+
+[project.scripts]
+jeff-tui = "jefftui.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

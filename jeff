@@ -1517,6 +1517,18 @@ cmd_version() {
     echo "jeff ${JEFF_VERSION}"
 }
 
+cmd_tui() {
+    # the new standalone terminal: a Python TUI on cue-tui-kit (same chrome + sounds as Cue
+    # Vault), driving THIS CLI. JEFF_CLI points it back at this exact script; PYTHONPATH finds
+    # the jefftui package in src/. Falls back to a clear message if python3 isn't available.
+    export JEFF_CLI="${JEFF_DIR}/jeff"
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "jeff tui needs python3." >&2
+        return 1
+    fi
+    PYTHONPATH="${JEFF_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}" exec python3 -m jefftui "$@"
+}
+
 # ============================================================
 # DISPATCH
 # ============================================================
@@ -1580,6 +1592,9 @@ case "${COMMAND}" in
 
     # Dashboard (default)
     dashboard)      cmd_dashboard ;;
+
+    # Terminal (the standalone Python TUI, on cue-tui-kit)
+    tui)            cmd_tui "$@" ;;
 
     # Info
     version)        cmd_version ;;
