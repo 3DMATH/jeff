@@ -1289,6 +1289,14 @@ PYEOF
 # DEV -- developer conveniences
 # ============================================================
 
+# Deterministic sha-256 manifest of every file under $1 (relative paths, sorted). Used to prove
+# a dev flash left the weights byte-identical to the source.
+_weights_manifest() {
+    ( cd "$1" 2>/dev/null && find . -type f | LC_ALL=C sort | while IFS= read -r f; do
+        shasum -a 256 "${f}"
+    done )
+}
+
 cmd_dev() {
     local subcmd="${1:-help}"
     shift 2>/dev/null || true
@@ -1298,31 +1306,32 @@ cmd_dev() {
             echo ""
             echo -e "  ${C_BOLD}Jeff Dev${C_RESET} ${C_DIM}(developer conveniences)${C_RESET}"
             echo ""
-            echo "  jeff dev flash [disk]   Re-flash a chip but KEEP its model weights"
-            echo -e "                          ${C_DIM}auto-targets the inserted card if there's one${C_RESET}"
+            echo "  jeff dev flash [disk]   Reduce a card to the DEV BASELINE: nothing but the"
+            echo "                          model weights, byte-identical to the source."
+            echo -e "                          ${C_DIM}no heartbeat, no vault, no mcp -- the clean floor${C_RESET}"
             echo ""
             ;;
     esac
 }
 
 cmd_dev_flash() {
-    # A developer re-flash: erase + reprovision the card, but PRESERVE the on-card model
-    # weights (stash -> erase -> init --skip-model -> restore). No multi-GB re-download
-    # between iterations. Still destructive to the vault/data -- same confirm gate as admin
-    # flash. If no disk is named, auto-target the single inserted flashable card.
+    # The DEV BASELINE: erase a card and put back ONLY the model weights, byte-identical to the
+    # source. No heartbeat, no vault, no MCP server, no datasets, no index. The weights are the
+    # one expensive thing worth keeping; everything else is provisioning we rebuild deliberately.
+    # This bare card is the clean floor the new product flash is designed on.
     local disk="${1:-}"
     [[ -n "${disk}" ]] && shift
 
-    local disks_json count dlabel=""
+    local disks_json count label=""
     disks_json=$(cmd_disks --flashable)
     count=$(echo "${disks_json}" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
 
     if [[ -z "${disk}" ]]; then
         if [[ "${count}" == "1" ]]; then
             disk=$(echo "${disks_json}" | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['disk'])")
-            dlabel=$(echo "${disks_json}" | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['label'])")
+            label=$(echo "${disks_json}" | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['label'])")
             echo ""
-            echo "  Auto-targeting the inserted card:  ${disk} (${dlabel})"
+            echo "  Auto-targeting the inserted card:  ${disk} (${label})"
         elif [[ "${count}" == "0" ]]; then
             fail "no flashable card detected -- insert one, or name it: jeff dev flash /dev/diskN"
             return 1
@@ -1332,16 +1341,96 @@ cmd_dev_flash() {
             return 1
         fi
     else
-        # look up the real volume label for a named disk (diskutil on a whole disk has none)
-        dlabel=$(echo "${disks_json}" | python3 -c "import json,sys; d=json.load(sys.stdin); print(next((x['label'] for x in d if x['disk']==sys.argv[1]), ''))" "${disk}" 2>/dev/null)
+        label=$(echo "${disks_json}" | python3 -c "import json,sys; d=json.load(sys.stdin); print(next((x['label'] for x in d if x['disk']==sys.argv[1]), ''))" "${disk}" 2>/dev/null)
+    fi
+    [[ -z "${label}" ]] && label="Chip"
+
+    # locate the weights currently on the card (models/ at its mount)
+    local src_mount=""
+    if [[ -d "/Volumes/${label}/models" ]]; then
+        src_mount="/Volumes/${label}"
+    else
+        local _dn _v _pw
+        _dn=$(basename "${disk}")
+        for _v in /Volumes/*/; do
+            _pw=$(diskutil info "${_v%/}" 2>/dev/null | awk -F': *' '/Part of Whole/{print $2}' | tr -d ' ')
+            if [[ "${_pw}" == "${_dn}" ]] && [[ -d "${_v}models" ]]; then src_mount="${_v%/}"; break; fi
+        done
+    fi
+    if [[ -z "${src_mount}" ]] || [[ -z "$(ls -A "${src_mount}/models" 2>/dev/null)" ]]; then
+        fail "no model weights found on ${disk} -- nothing to baseline"
+        echo -e "  ${C_DIM}dev flash preserves EXISTING weights; it does not download any.${C_RESET}"
+        return 1
     fi
 
-    echo -e "  ${C_DIM}dev flash: the model weights will be preserved across the erase${C_RESET}"
-    # pass the real label first; the user's own --label in "$@" (if any) is parsed later and wins
-    if [[ -n "${dlabel}" ]]; then
-        cmd_admin_flash "${disk}" --label "${dlabel}" --keep-model "$@"
+    local wsz wn
+    wsz=$(du -sh "${src_mount}/models" 2>/dev/null | awk '{print $1}')
+    wn=$(find "${src_mount}/models" -type f 2>/dev/null | wc -l | tr -d ' ')
+
+    echo ""
+    echo -e "  ${C_RED}DESTRUCTIVE${C_RESET}  dev flash reduces ${disk} to the bare baseline."
+    echo ""
+    echo "    keep:  model weights only  -- ${wn} files, ${wsz}, byte-identical"
+    echo "    drop:  heartbeat, vault, mcp, datasets, index -- everything else"
+    echo ""
+    local disk_short; disk_short=$(basename "${disk}")
+    echo -e "  Type ${C_BOLD}ERASE ${disk_short}${C_RESET} to confirm:"
+    read -rp "  > " CONFIRM
+    echo ""
+    if [[ "${CONFIRM}" != "ERASE ${disk_short}" ]]; then
+        echo "  Aborted."
+        return 1
+    fi
+
+    # [1/4] stash weights to internal temp (a failure here erases nothing)
+    local stash
+    stash=$(mktemp -d "${TMPDIR:-/tmp}/jeff-devbase.XXXXXX")
+    echo "  [1/4] Preserving weights (${wsz}) to a temp dir ..."
+    if ! cp -R "${src_mount}/models/." "${stash}/" 2>/dev/null; then
+        fail "could not stash weights -- aborting, nothing erased"
+        rm -rf "${stash}"
+        return 1
+    fi
+    local src_manifest
+    src_manifest=$(_weights_manifest "${stash}")
+
+    # [2/4] erase + format ONLY -- no init, no heartbeat, no vault
+    echo "  [2/4] Erasing ${disk} and formatting ExFAT (${label}) ..."
+    if ! diskutil eraseDisk ExFAT "${label}" GPT "${disk}" >/dev/null; then
+        fail "erase failed -- your weights are safe at ${stash}"
+        return 1
+    fi
+    local mount_point="/Volumes/${label}"
+    if [[ ! -d "${mount_point}" ]]; then
+        fail "card did not remount at ${mount_point} -- weights safe at ${stash}"
+        return 1
+    fi
+
+    # [3/4] restore ONLY the weights, then strip macOS volume cruft so it's truly weights-only
+    echo "  [3/4] Restoring weights to ${mount_point}/models ..."
+    mkdir -p "${mount_point}/models"
+    if ! cp -R "${stash}/." "${mount_point}/models/" 2>/dev/null; then
+        fail "restore failed -- your weights are safe at ${stash}"
+        return 1
+    fi
+    rm -rf "${mount_point}/.Spotlight-V100" "${mount_point}/.fseventsd" "${mount_point}/.Trashes" 2>/dev/null || true
+
+    # [4/4] verify byte-identical against the source manifest
+    echo "  [4/4] Verifying byte-identical ..."
+    local dst_manifest
+    dst_manifest=$(_weights_manifest "${mount_point}/models")
+    if [[ "${src_manifest}" == "${dst_manifest}" ]]; then
+        rm -rf "${stash}"
+        echo ""
+        ok "Dev baseline ready: ${wn} files, ${wsz} -- byte-identical to source"
+        echo -e "  ${C_DIM}the card holds nothing but the weights. clean floor for the new flash.${C_RESET}"
+        echo ""
     else
-        cmd_admin_flash "${disk}" --keep-model "$@"
+        fail "VERIFY FAILED -- restored weights differ from source"
+        echo -e "  ${C_DIM}your original weights are safe at ${stash}${C_RESET}"
+        echo ""
+        diff <(echo "${src_manifest}") <(echo "${dst_manifest}") | head -12
+        return 1
     fi
 }
 
@@ -1372,7 +1461,7 @@ cmd_admin_flash() {
     local disk="${1:?Usage: jeff admin flash /dev/diskN [--label NAME] [--size 8g]}"
     shift
 
-    local label="" vault_size="8g" model_name="qwen2.5:7b-instruct-q4_K_M" skip_confirm=false keep_model=false
+    local label="" vault_size="8g" model_name="qwen2.5:7b-instruct-q4_K_M" skip_confirm=false
 
     # Try to detect existing volume name
     local existing
@@ -1389,7 +1478,6 @@ cmd_admin_flash() {
             --size)   vault_size="$2"; shift 2 ;;
             --model)  model_name="$2"; shift 2 ;;
             --yes)    skip_confirm=true; shift ;;
-            --keep-model) keep_model=true; shift ;;   # dev flash: preserve weights across the erase
             *)        echo "Unknown arg: $1"; exit 1 ;;
         esac
     done
@@ -1433,40 +1521,6 @@ cmd_admin_flash() {
         fi
     fi
 
-    # Preserve model weights BEFORE the erase (dev flash). Find the card's current mount, copy
-    # its models/ to a temp stash on the internal disk; we restore it after init. Doing this
-    # first means a stash failure aborts before anything is erased.
-    local stash=""
-    if [[ "${keep_model}" == "true" ]]; then
-        local cur_mount=""
-        if [[ -d "/Volumes/${existing}/models" ]]; then
-            cur_mount="/Volumes/${existing}"
-        else
-            local _dn _v _pw
-            _dn=$(basename "${disk}")
-            for _v in /Volumes/*/; do
-                _pw=$(diskutil info "${_v%/}" 2>/dev/null | awk -F': *' '/Part of Whole/{print $2}' | tr -d ' ')
-                if [[ "${_pw}" == "${_dn}" ]] && [[ -d "${_v}models" ]]; then cur_mount="${_v%/}"; break; fi
-            done
-        fi
-        if [[ -n "${cur_mount}" ]] && [[ -n "$(ls -A "${cur_mount}/models" 2>/dev/null)" ]]; then
-            local _msz
-            _msz=$(du -sh "${cur_mount}/models" 2>/dev/null | awk '{print $1}')
-            stash=$(mktemp -d "${TMPDIR:-/tmp}/jeff-devflash.XXXXXX")
-            echo "  Preserving model weights (${_msz}) from ${cur_mount}/models ..."
-            if ! cp -R "${cur_mount}/models/." "${stash}/" 2>/dev/null; then
-                fail "could not stash model weights -- aborting, nothing erased"
-                rm -rf "${stash}"
-                exit 1
-            fi
-            ok "Stashed ${_msz} of weights (will restore after flash)"
-            echo ""
-        else
-            warn "no model weights found on ${disk} to preserve -- flashing fresh"
-            keep_model=false
-        fi
-    fi
-
     # Erase
     echo "  [1/2] Erasing ${disk}..."
     diskutil eraseDisk ExFAT "${label}" GPT "${disk}"
@@ -1483,39 +1537,11 @@ cmd_admin_flash() {
     # Init
     echo "  [2/2] Initializing chip..."
     echo ""
-    local -a _model_args=(--model "${model_name}")
-    [[ "${keep_model}" == "true" ]] && _model_args+=(--skip-model)   # we restore weights ourselves
-    local _init_rc=0
     "${CHIP_DIR}/init.sh" "${mount_point}" \
         --label "${label}" \
         --size "${vault_size}" \
-        "${_model_args[@]}" \
-        --skip-reformat || _init_rc=$?
-
-    # ALWAYS restore the preserved weights -- even if init bailed partway (e.g. the vault step).
-    # The weights must never be stranded in the stash just because a later step failed.
-    if [[ "${keep_model}" == "true" ]] && [[ -n "${stash}" ]]; then
-        echo ""
-        echo "  Restoring model weights to ${mount_point}/models ..."
-        mkdir -p "${mount_point}/models"
-        if cp -R "${stash}/." "${mount_point}/models/" 2>/dev/null; then
-            local _rsz
-            _rsz=$(du -sh "${mount_point}/models" 2>/dev/null | awk '{print $1}')
-            ok "Model weights restored (${_rsz}) -- skipped the re-download"
-            rm -rf "${stash}"
-        else
-            warn "weight restore FAILED -- your stash is safe at: ${stash}"
-        fi
-    fi
-
-    if [[ "${_init_rc}" != "0" ]]; then
-        echo ""
-        fail "init did not finish (rc=${_init_rc}) -- the card is missing its vault."
-        echo -e "  ${C_DIM}weights are preserved. finish with a passphrase: VAULT_PASS=... jeff dev flash${C_RESET}"
-        echo -e "  ${C_DIM}or run 'jeff dev flash' in a real terminal and type it at the prompt.${C_RESET}"
-        echo ""
-        exit "${_init_rc}"
-    fi
+        --model "${model_name}" \
+        --skip-reformat
 
     echo ""
     ok "Chip ready: ${label}"

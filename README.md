@@ -75,15 +75,18 @@ jeff constellation "#F00" "#0F0" "#00F"
 ### Dev flash
 
 ```bash
-jeff dev flash            # re-flash the inserted card, KEEP its model weights
+jeff dev flash            # reduce the inserted card to the dev baseline
 jeff dev flash /dev/diskN # or name the disk explicitly
 ```
 
-A developer re-flash for fast iteration: it stashes the card's `models/` weights, does the
-normal erase + reprovision, then restores the weights -- so you refresh the MCP server, spec,
-and datasets without the multi-GB model re-download each time. Still destructive to the vault
-and data (same confirm gate); only the weights are preserved. Under the hood it's
-`jeff admin flash <disk> --keep-model`, and `chip/init.sh --skip-model` does the skip.
+Reduces a card to the **dev baseline**: nothing but the model weights, byte-identical to the
+source. It stashes `models/`, erases + formats the card, restores only the weights, and verifies
+the result is byte-identical (a sha-256 manifest of every file). Everything else -- heartbeat,
+vault, MCP server, datasets, search index -- is dropped. Destructive (same confirm gate), but the
+weights are stashed before the erase and kept safe if any step fails.
+
+This bare card is the clean floor the product flash is designed on: the weights are the one
+expensive thing worth preserving; all other provisioning is rebuilt deliberately.
 
 ## The terminal
 
