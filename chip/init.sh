@@ -269,14 +269,22 @@ PYEOF
 
 echo "  [4/5] Creating encrypted vault..."
 echo ""
-echo "        Set a passphrase for the vault."
-echo "        You need this to access credentials and state."
-echo ""
 
-read -rsp "        Passphrase: " VAULT_PASS
-echo ""
-read -rsp "        Confirm:    " VAULT_PASS2
-echo ""
+# A passphrase supplied in the environment (VAULT_PASS) runs non-interactively -- this is how
+# `jeff dev flash` and other automation finish without a TTY. Otherwise, prompt for it.
+if [[ -n "${VAULT_PASS:-}" ]]; then
+    echo "        Using the vault passphrase from the environment (VAULT_PASS)."
+    echo ""
+    VAULT_PASS2="${VAULT_PASS}"
+else
+    echo "        Set a passphrase for the vault."
+    echo "        You need this to access credentials and state."
+    echo ""
+    read -rsp "        Passphrase: " VAULT_PASS
+    echo ""
+    read -rsp "        Confirm:    " VAULT_PASS2
+    echo ""
+fi
 
 if [[ "${VAULT_PASS}" != "${VAULT_PASS2}" ]]; then
     echo "ERROR: Passphrases do not match."

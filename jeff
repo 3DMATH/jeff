@@ -1485,13 +1485,15 @@ cmd_admin_flash() {
     echo ""
     local -a _model_args=(--model "${model_name}")
     [[ "${keep_model}" == "true" ]] && _model_args+=(--skip-model)   # we restore weights ourselves
+    local _init_rc=0
     "${CHIP_DIR}/init.sh" "${mount_point}" \
         --label "${label}" \
         --size "${vault_size}" \
         "${_model_args[@]}" \
-        --skip-reformat
+        --skip-reformat || _init_rc=$?
 
-    # Restore the preserved weights onto the fresh card (dev flash) -- no re-download.
+    # ALWAYS restore the preserved weights -- even if init bailed partway (e.g. the vault step).
+    # The weights must never be stranded in the stash just because a later step failed.
     if [[ "${keep_model}" == "true" ]] && [[ -n "${stash}" ]]; then
         echo ""
         echo "  Restoring model weights to ${mount_point}/models ..."
@@ -1504,6 +1506,15 @@ cmd_admin_flash() {
         else
             warn "weight restore FAILED -- your stash is safe at: ${stash}"
         fi
+    fi
+
+    if [[ "${_init_rc}" != "0" ]]; then
+        echo ""
+        fail "init did not finish (rc=${_init_rc}) -- the card is missing its vault."
+        echo -e "  ${C_DIM}weights are preserved. finish with a passphrase: VAULT_PASS=... jeff dev flash${C_RESET}"
+        echo -e "  ${C_DIM}or run 'jeff dev flash' in a real terminal and type it at the prompt.${C_RESET}"
+        echo ""
+        exit "${_init_rc}"
     fi
 
     echo ""
