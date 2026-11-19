@@ -23,6 +23,17 @@ Ask your AI: "tell me about spectral binding."
 
 It answers from the chip. It didn't know that before you plugged it in.
 
+> **Where this is going (2026-11-19).** This repo is the current Jeff **substrate** — the vault
+> array, the bash CLI, the spectral tools, and the on-card MCP described below. The product is
+> converging on a simpler, unified **Jeff card** model being built in
+> [`3DMATH/cue`](https://github.com/3DMATH/cue): a card holds the model (plaintext weights), your
+> home (plaintext files + `rules.md`), and one encrypted **brain** (the index) sealed with
+> **N-factor auth** — the [`keeper`](https://github.com/3DMATH/keeper) reference component. The
+> governing principle is *encrypt the map, never the territory*: content stays a normal file,
+> only the brain is sealed. The `heartbeat.json` / `sparseimage` model below is the older
+> substrate and will be reconciled toward that standard. `jeff tui` and `dev flash` already point
+> the right way.
+
 ## What happens
 
 1. Flash burns an MCP server, model weights, and an encrypted vault onto the card
