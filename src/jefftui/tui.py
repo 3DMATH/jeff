@@ -3,7 +3,7 @@
 A smaller cousin of the Cue Vault TUI, driving the real Jeff substrate through bridge.py. The
 command rail adapts to Jeff's state the same way the old tui.sh did -- idle / activated /
 read-write / read-only -- but it's standalone and styled like Cue Vault: cold-steel banner,
-the 🪐 lock slot, arrow-step the rail, Enter runs the highlighted one, or press the letter.
+the 🍣 lock slot, arrow-step the rail, Enter runs the highlighted one, or press the letter.
 """
 import cuekit
 from cuekit import (DIM, EDGE, GOLD, INK, MUTE, RED, ask, c, clear, pause,
@@ -12,7 +12,7 @@ from cuekit import (DIM, EDGE, GOLD, INK, MUTE, RED, ask, c, clear, pause,
 from . import bridge
 from .version import BUILD
 
-LOCK = "🪐"
+LOCK = "🍣"
 _cursor = 0
 
 
@@ -67,7 +67,7 @@ def _midpoint():
 def _activate():
     cs = bridge.chips()
     if not cs:
-        pause("no chips detected 🪐  -- insert an SD card.\n     "
+        pause("no chips detected 🍣  -- insert an SD card.\n     "
               "(no hardware? the cue node can emulate one: `cue chip new`.)", MUTE, header=_banner)
         return
     clear(); _banner()
@@ -182,7 +182,7 @@ def render():
     _banner()
     tag = {"": "no chip active", "activated": "chip active",
            "read-write": "read-write", "read-only": "read-only"}.get(mode, mode)
-    print("  %s %s %s" % ("🪐", c("jeff".ljust(8), INK),
+    print("  %s %s %s" % ("🍣", c("jeff".ljust(8), INK),
                           c(bridge.version() + "  ·  " + tag + (("  ·  " + label) if label else ""),
                             GOLD if mode else MUTE)))
     chips = bridge.chips()
