@@ -72,6 +72,19 @@ jeff midpoint "#FF0000" "#00FF00"  # discover midpoints
 jeff constellation "#F00" "#0F0" "#00F"
 ```
 
+### Dev flash
+
+```bash
+jeff dev flash            # re-flash the inserted card, KEEP its model weights
+jeff dev flash /dev/diskN # or name the disk explicitly
+```
+
+A developer re-flash for fast iteration: it stashes the card's `models/` weights, does the
+normal erase + reprovision, then restores the weights -- so you refresh the MCP server, spec,
+and datasets without the multi-GB model re-download each time. Still destructive to the vault
+and data (same confirm gate); only the weights are preserved. Under the hood it's
+`jeff admin flash <disk> --keep-model`, and `chip/init.sh --skip-model` does the skip.
+
 ## The terminal
 
 ```bash

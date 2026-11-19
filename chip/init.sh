@@ -30,6 +30,7 @@ LABEL=""
 VAULT_SIZE="4g"
 MODEL_NAME="qwen2.5:7b-instruct-q4_K_M"
 SKIP_REFORMAT=false
+SKIP_MODEL=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -37,6 +38,7 @@ while [[ $# -gt 0 ]]; do
         --size)           VAULT_SIZE="$2"; shift 2 ;;
         --model)          MODEL_NAME="$2"; shift 2 ;;
         --skip-reformat)  SKIP_REFORMAT=true; shift ;;
+        --skip-model)     SKIP_MODEL=true; shift ;;   # dev flash restores weights itself
         *)                echo "Unknown arg: $1"; exit 1 ;;
     esac
 done
@@ -123,7 +125,9 @@ MEOF
 
 # Model weights -- export from Ollama if available
 mkdir -p "${VOLUME_PATH}/models"
-if command -v ollama &>/dev/null; then
+if [[ "${SKIP_MODEL}" == "true" ]]; then
+    echo "        Model weights: skipped -- dev flash is preserving them"
+elif command -v ollama &>/dev/null; then
     echo "        Checking for model: ${MODEL_NAME}"
     BLOB_PATH=$(ollama show "${MODEL_NAME}" --modelfile 2>/dev/null | head -1 | sed 's/^FROM //')
     if [[ -z "${BLOB_PATH}" ]] || [[ ! -f "${BLOB_PATH}" ]]; then

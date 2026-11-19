@@ -1285,6 +1285,66 @@ PYEOF
 # ADMIN (destructive -- behind glass)
 # ============================================================
 
+# ============================================================
+# DEV -- developer conveniences
+# ============================================================
+
+cmd_dev() {
+    local subcmd="${1:-help}"
+    shift 2>/dev/null || true
+    case "${subcmd}" in
+        flash)  cmd_dev_flash "$@" ;;
+        *)
+            echo ""
+            echo -e "  ${C_BOLD}Jeff Dev${C_RESET} ${C_DIM}(developer conveniences)${C_RESET}"
+            echo ""
+            echo "  jeff dev flash [disk]   Re-flash a chip but KEEP its model weights"
+            echo -e "                          ${C_DIM}auto-targets the inserted card if there's one${C_RESET}"
+            echo ""
+            ;;
+    esac
+}
+
+cmd_dev_flash() {
+    # A developer re-flash: erase + reprovision the card, but PRESERVE the on-card model
+    # weights (stash -> erase -> init --skip-model -> restore). No multi-GB re-download
+    # between iterations. Still destructive to the vault/data -- same confirm gate as admin
+    # flash. If no disk is named, auto-target the single inserted flashable card.
+    local disk="${1:-}"
+    [[ -n "${disk}" ]] && shift
+
+    local disks_json count dlabel=""
+    disks_json=$(cmd_disks --flashable)
+    count=$(echo "${disks_json}" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+
+    if [[ -z "${disk}" ]]; then
+        if [[ "${count}" == "1" ]]; then
+            disk=$(echo "${disks_json}" | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['disk'])")
+            dlabel=$(echo "${disks_json}" | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['label'])")
+            echo ""
+            echo "  Auto-targeting the inserted card:  ${disk} (${dlabel})"
+        elif [[ "${count}" == "0" ]]; then
+            fail "no flashable card detected -- insert one, or name it: jeff dev flash /dev/diskN"
+            return 1
+        else
+            fail "more than one flashable disk -- name the one you mean: jeff dev flash /dev/diskN"
+            cmd_disks --flashable
+            return 1
+        fi
+    else
+        # look up the real volume label for a named disk (diskutil on a whole disk has none)
+        dlabel=$(echo "${disks_json}" | python3 -c "import json,sys; d=json.load(sys.stdin); print(next((x['label'] for x in d if x['disk']==sys.argv[1]), ''))" "${disk}" 2>/dev/null)
+    fi
+
+    echo -e "  ${C_DIM}dev flash: the model weights will be preserved across the erase${C_RESET}"
+    # pass the real label first; the user's own --label in "$@" (if any) is parsed later and wins
+    if [[ -n "${dlabel}" ]]; then
+        cmd_admin_flash "${disk}" --label "${dlabel}" --keep-model "$@"
+    else
+        cmd_admin_flash "${disk}" --keep-model "$@"
+    fi
+}
+
 cmd_admin() {
     local subcmd="${1:-}"
     shift 2>/dev/null || true
@@ -1312,7 +1372,7 @@ cmd_admin_flash() {
     local disk="${1:?Usage: jeff admin flash /dev/diskN [--label NAME] [--size 8g]}"
     shift
 
-    local label="" vault_size="8g" model_name="qwen2.5:7b-instruct-q4_K_M" skip_confirm=false
+    local label="" vault_size="8g" model_name="qwen2.5:7b-instruct-q4_K_M" skip_confirm=false keep_model=false
 
     # Try to detect existing volume name
     local existing
@@ -1329,6 +1389,7 @@ cmd_admin_flash() {
             --size)   vault_size="$2"; shift 2 ;;
             --model)  model_name="$2"; shift 2 ;;
             --yes)    skip_confirm=true; shift ;;
+            --keep-model) keep_model=true; shift ;;   # dev flash: preserve weights across the erase
             *)        echo "Unknown arg: $1"; exit 1 ;;
         esac
     done
@@ -1372,6 +1433,40 @@ cmd_admin_flash() {
         fi
     fi
 
+    # Preserve model weights BEFORE the erase (dev flash). Find the card's current mount, copy
+    # its models/ to a temp stash on the internal disk; we restore it after init. Doing this
+    # first means a stash failure aborts before anything is erased.
+    local stash=""
+    if [[ "${keep_model}" == "true" ]]; then
+        local cur_mount=""
+        if [[ -d "/Volumes/${existing}/models" ]]; then
+            cur_mount="/Volumes/${existing}"
+        else
+            local _dn _v _pw
+            _dn=$(basename "${disk}")
+            for _v in /Volumes/*/; do
+                _pw=$(diskutil info "${_v%/}" 2>/dev/null | awk -F': *' '/Part of Whole/{print $2}' | tr -d ' ')
+                if [[ "${_pw}" == "${_dn}" ]] && [[ -d "${_v}models" ]]; then cur_mount="${_v%/}"; break; fi
+            done
+        fi
+        if [[ -n "${cur_mount}" ]] && [[ -n "$(ls -A "${cur_mount}/models" 2>/dev/null)" ]]; then
+            local _msz
+            _msz=$(du -sh "${cur_mount}/models" 2>/dev/null | awk '{print $1}')
+            stash=$(mktemp -d "${TMPDIR:-/tmp}/jeff-devflash.XXXXXX")
+            echo "  Preserving model weights (${_msz}) from ${cur_mount}/models ..."
+            if ! cp -R "${cur_mount}/models/." "${stash}/" 2>/dev/null; then
+                fail "could not stash model weights -- aborting, nothing erased"
+                rm -rf "${stash}"
+                exit 1
+            fi
+            ok "Stashed ${_msz} of weights (will restore after flash)"
+            echo ""
+        else
+            warn "no model weights found on ${disk} to preserve -- flashing fresh"
+            keep_model=false
+        fi
+    fi
+
     # Erase
     echo "  [1/2] Erasing ${disk}..."
     diskutil eraseDisk ExFAT "${label}" GPT "${disk}"
@@ -1388,11 +1483,28 @@ cmd_admin_flash() {
     # Init
     echo "  [2/2] Initializing chip..."
     echo ""
+    local -a _model_args=(--model "${model_name}")
+    [[ "${keep_model}" == "true" ]] && _model_args+=(--skip-model)   # we restore weights ourselves
     "${CHIP_DIR}/init.sh" "${mount_point}" \
         --label "${label}" \
         --size "${vault_size}" \
-        --model "${model_name}" \
+        "${_model_args[@]}" \
         --skip-reformat
+
+    # Restore the preserved weights onto the fresh card (dev flash) -- no re-download.
+    if [[ "${keep_model}" == "true" ]] && [[ -n "${stash}" ]]; then
+        echo ""
+        echo "  Restoring model weights to ${mount_point}/models ..."
+        mkdir -p "${mount_point}/models"
+        if cp -R "${stash}/." "${mount_point}/models/" 2>/dev/null; then
+            local _rsz
+            _rsz=$(du -sh "${mount_point}/models" 2>/dev/null | awk '{print $1}')
+            ok "Model weights restored (${_rsz}) -- skipped the re-download"
+            rm -rf "${stash}"
+        else
+            warn "weight restore FAILED -- your stash is safe at: ${stash}"
+        fi
+    fi
 
     echo ""
     ok "Chip ready: ${label}"
@@ -1566,6 +1678,9 @@ case "${COMMAND}" in
 
     # Admin (behind glass)
     admin)          cmd_admin "$@" ;;
+
+    # Dev conveniences
+    dev)            cmd_dev "$@" ;;
 
     # Legacy aliases
     activate)       cmd_activate "$@" ;;
